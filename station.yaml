@@ -16,6 +16,12 @@ station:
     value: 3
     unit: foot                 # foot | meter
   archive_interval: 60         # seconds (rtl_433 sensors transmit every ~9-16 s)
+  # IANA tz name (e.g. "America/Chicago", "Europe/London"). Picked up by the
+  # entrypoint before weewxd starts, so all timestamps -- current readings,
+  # archive records, news dates, the dashboard's "Last update" -- render in
+  # this zone. Defaults to the container's TZ (UTC for the python:3-slim base);
+  # the TZ env var on the weewx service (if set) takes precedence.
+  # timezone: "America/Chicago"
 
 # ── MQTT broker (the driver subscribes and publish writes here) ───────────
 mqtt:

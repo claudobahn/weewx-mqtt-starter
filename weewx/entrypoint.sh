@@ -12,6 +12,26 @@ set -eu
 WEEWX_ROOT="/data"
 CONF="${WEEWX_ROOT}/weewx.conf"
 
+# Honor station.yaml's `station.timezone:` for both configure.py and weewxd.
+# Python's `time` / `datetime` read TZ once at process startup, so it has to be
+# in the environment BEFORE we exec python/weewxd (configure.py can't set its
+# own TZ for a subsequent weewxd process). Falls back to the existing TZ env
+# (or container default / UTC) when station.timezone is absent. Empty / missing
+# YAML is silently tolerated -- weewxd just runs in whatever TZ it had.
+if [ -z "${TZ:-}" ] && [ -f /station.yaml ]; then
+  tz="$(python3 -c "
+import yaml, sys
+try:
+    cfg = yaml.safe_load(open('/station.yaml')) or {}
+    print((cfg.get('station') or {}).get('timezone') or '', end='')
+except Exception:
+    sys.exit(0)
+" 2>/dev/null || true)"
+  if [ -n "$tz" ]; then
+    export TZ="$tz"
+  fi
+fi
+
 if [ "${1:-}" = "--version" ]; then
   exec weewxd --version
 fi
