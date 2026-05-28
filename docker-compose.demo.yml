@@ -1,0 +1,16 @@
+# Demo overlay -- run WeeWX on its built-in Simulator driver instead of the
+# MQTTSubscribe driver, so the dashboard comes alive with a full set of synthetic
+# observations (temperature, barometer, wind, rain, ...) without any MQTT/RF data
+# source. Apply on top of the base file, on a FRESH ./data (the driver is chosen
+# at first-run bootstrap by configure.py):
+#
+#   docker compose down && rm -rf data mosquitto/data
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.demo.yml ./setup.sh
+#
+# This is the "see it work in one command" path. To exercise the real rtl_433 ->
+# MQTTSubscribe pipeline instead, use the base template + ./e2e-test.sh.
+
+services:
+  weewx:
+    environment:
+      WEEWX_DRIVER: simulator

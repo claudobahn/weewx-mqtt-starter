@@ -1,0 +1,8 @@
+# Dev / base: serve the generated fuzzy-archer report over plain HTTP on :80
+# (published to 127.0.0.1:8080). No TLS and nothing proxied -- the browser's live
+# gauges connect straight to the broker's WebSocket listener (ws://localhost:9001).
+# The production overlay swaps in Caddyfile.prod for TLS + wss + Let's Encrypt.
+:80 {
+	root * /srv
+	file_server
+}

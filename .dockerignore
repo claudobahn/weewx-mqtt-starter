@@ -1,0 +1,7 @@
+# Keep the build context small: only the Dockerfile and entrypoint are needed
+# to build the weewx image.
+data/
+mosquitto/data/
+.git/
+.idea/
+*.md

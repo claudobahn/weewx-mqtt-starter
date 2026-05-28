@@ -1,0 +1,22 @@
+# Production: Caddy terminates TLS (automatic Let's Encrypt) and serves the
+# dashboard directly from /srv (the generated report).
+#   https://<DOMAIN>/   -> the fuzzy-archer report (static files)
+#   wss://<DOMAIN>/     -> the broker's WebSocket listener (mqtt:9001)
+# DOMAIN and ACME_EMAIL come from the environment (set in .env).
+#
+# The OMG MQTT-over-TLS path (mqtts://<DOMAIN>:8883) does NOT go through Caddy
+# (it's raw MQTT, not HTTP) -- Mosquitto serves 8883 directly using the cert the
+# cert-reload sidecar copies out of Caddy's store.
+
+{$DOMAIN} {
+	tls {$ACME_EMAIL}
+
+	# WebSocket upgrades -> the broker; everything else -> the static report.
+	@ws {
+		header Connection *Upgrade*
+		header Upgrade websocket
+	}
+	reverse_proxy @ws mqtt:9001
+	root * /srv
+	file_server
+}

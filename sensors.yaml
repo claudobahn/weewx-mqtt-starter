@@ -1,0 +1,49 @@
+# sensors.yaml — map rtl_433 sensors (relayed by OpenMQTTGateway) to WeeWX fields.
+#
+# configure.py reads this and writes the [MQTTSubscribeDriver] section of
+# weewx.conf. Edit it to match your sensors; nothing else needs changing.
+# See the README "Multiple sensors (sensors.yaml)" section.
+#
+# Notes:
+#   * rtl_433 is metric, so give each numeric field its input `units` (a WeeWX
+#     unit name) and the value is converted to `unit_system` below. Humidity/
+#     direction/UV need no units.
+#   * Fields you don't list are dropped (ignore_unmapped defaults to true) -- so
+#     rtl_433's string metadata (model, mic, protocol, ...) can't break the
+#     numeric conversion. Set `ignore_unmapped: false` to process every field.
+#   * `contains_total: true` turns a cumulative counter (e.g. rain_mm) into the
+#     per-interval delta.
+#   * topics may use MQTT wildcards (+ / #); the OMG instance name and sensor id
+#     don't need pinning.
+
+# Unit system the loop packets are tagged with. US keeps the published keys as
+# outTemp_F / windSpeed_mph etc. (what the fuzzy-archer gauges expect).
+unit_system: US
+
+sensors:
+  # --- Primary station -------------------------------------------------------
+  # Test rig is a Fine Offset WS80 (no rain/pressure). For the WS90, change the
+  # model in the topic to Fineoffset-WS90 (rain_mm is already mapped below and
+  # is simply absent on a WS80).
+  - name: primary
+    topic: home/+/RTL_433toMQTT/Fineoffset-WS80/+
+    fields:
+      temperature_C: { name: outTemp,     units: degree_C }
+      humidity:      { name: outHumidity }
+      wind_avg_m_s:  { name: windSpeed,   units: meter_per_second }
+      wind_max_m_s:  { name: windGust,    units: meter_per_second }
+      wind_dir_deg:  { name: windDir }
+      uvi:           { name: UV }
+      rain_mm:       { name: rain, units: mm, contains_total: true }   # WS90 only
+
+  # --- Extra thermo-hygrometer (Ambient/Ecowitt WH31B) -----------------------
+  # Mapped to the "extra 1" slot. For an indoor unit, map to inTemp / inHumidity.
+  - name: wh31b-ch1
+    topic: home/+/RTL_433toMQTT/AmbientWeather-WH31B/+
+    msg_id_field: channel        # distinguish channels (stable across battery swaps)
+    fields:
+      temperature_C_1: { name: extraTemp1, units: degree_C }
+      humidity_1:      { name: extraHumid1 }
+      # Add more channels as you deploy them, e.g.:
+      # temperature_C_2: { name: extraTemp2, units: degree_C }
+      # humidity_2:      { name: extraHumid2 }

@@ -1,0 +1,69 @@
+# Production overlay — TLS everywhere. Apply on top of the base file:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Reconfigures the `web` (Caddy) service for automatic Let's Encrypt on 80/443
+# (dashboard https + wss), adds a Mosquitto TLS listener on 8883 for
+# OpenMQTTGateway, and a cert-reload sidecar. Requires DOMAIN + ACME_EMAIL in
+# .env and a bootstrap cert in mosquitto/certs/. See README "Production deployment".
+
+# Same log cap as the base file (anchors don't cross compose files). The base
+# services (mqtt/weewx/web) keep their own cap from docker-compose.yml.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  mqtt:
+    # Use the prod config (adds the 8883 TLS listener). Volumes are merged with
+    # the base file's; ports use !override so we explicitly *replace* the base's
+    # list -- otherwise the base's `0.0.0.0:1883` (LAN-friendly for the template)
+    # would merge in and expose plaintext MQTT on the internet alongside the TLS
+    # listener. In prod, only 8883 (TLS) is public; 1883/9001 stay loopback.
+    command: ["/usr/sbin/mosquitto", "-c", "/mosquitto/config/mosquitto.prod.conf"]
+    volumes:
+      - ./mosquitto/mosquitto.prod.conf:/mosquitto/config/mosquitto.prod.conf:ro
+      - ./mosquitto/certs:/mosquitto/certs:ro
+    ports: !override
+      - "127.0.0.1:1883:1883"   # plain MQTT -- loopback only (debugging on the prod host)
+      - "127.0.0.1:9001:9001"   # MQTT/WS -- loopback only (browser uses wss via Caddy)
+      - "0.0.0.0:8883:8883"     # MQTTS for OMG (internet-facing)
+
+  web:
+    # The `web` service IS Caddy (see base file). In prod it binds 80/443 and
+    # terminates TLS itself via Caddyfile.prod, serving the report from /srv and
+    # routing wss -> mqtt:9001. !override replaces (rather than merges) the ports
+    # list, dropping the dev loopback 8080 publish (Caddy routes by hostname now
+    # -- reach the dashboard at https://$DOMAIN).
+    depends_on:
+      - mqtt
+    ports: !override
+      - "0.0.0.0:80:80"     # ACME HTTP-01 challenge + HTTP->HTTPS redirect
+      - "0.0.0.0:443:443"   # dashboard (https) + wss
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+    volumes:
+      - ./caddy/Caddyfile.prod:/etc/caddy/Caddyfile:ro   # overrides the dev Caddyfile
+      - ./caddy/data:/data        # Let's Encrypt certs live here
+      - ./caddy/config:/config
+
+  # Copies Caddy's renewed cert to Mosquitto's cert path and SIGHUPs mosquitto.
+  # Shares mosquitto's PID namespace so it can signal it without docker.sock.
+  cert-reload:
+    image: alpine:3.22
+    container_name: weewx-cert-reload
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      - web
+      - mqtt
+    pid: "service:mqtt"
+    entrypoint: ["/bin/sh", "/cert-reload/reload.sh"]
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    volumes:
+      - ./cert-reload:/cert-reload:ro
+      - ./caddy/data:/caddy-data:ro
+      - ./mosquitto/certs:/certs
