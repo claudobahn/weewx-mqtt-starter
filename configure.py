@@ -230,18 +230,49 @@ def apply_qc(c, qc):
 
 
 def apply_units(c, units):
-    """[StdConvert][Group]: force display unit per group.
+    """[StdReport][[Defaults]][[[Units]]][[[[Groups]]]]: per-group display units.
 
-    `custom_groups` (defining brand-new unit groups) is written into
+    [StdConvert] only takes `target_unit` (the STORAGE unit-system selector);
+    it has no [[Group]] subsection -- writing one there is a phantom no-op
+    that nothing reads. The report-scoped Defaults block is where the skin
+    reads from for display unit overrides (and where mast-buoy puts its
+    `group_speed = knot`). Same structural issue as apply_labels.
+
+    Idempotent: clears + rebuilds the managed [[[[Groups]]]] block. Also
+    strips any legacy top-level [StdConvert][[Group]] from prior runs.
+
+    `custom_groups` (defining brand-new unit groups) is still written into
     `extra_obs.py` instead of weewx.conf -- see apply_observations().
     """
+    # Strip the old (broken) phantom location.
+    sc = c.get("StdConvert")
+    if isinstance(sc, dict):
+        sc.pop("Group", None)
+
+    defaults = c.setdefault("StdReport", {}).setdefault("Defaults", {})
     if not units:
+        u = defaults.get("Units")
+        if u:
+            u.pop("Groups", None)
+            if not u:
+                defaults.pop("Units", None)
         return
+
     groups = units.get("groups") or {}
-    if groups:
-        g = c.setdefault("StdConvert", {}).setdefault("Group", {})
-        for grp, unit in groups.items():
-            g[grp] = str(unit)
+    if not groups:
+        # No per-group overrides -> clean up any managed Groups block from prior runs.
+        u = defaults.get("Units")
+        if u:
+            u.pop("Groups", None)
+            if not u:
+                defaults.pop("Units", None)
+        return
+
+    u = defaults.setdefault("Units", {})
+    g = u.setdefault("Groups", {})
+    g.clear()
+    for grp, unit in groups.items():
+        g[grp] = str(unit)
 
 
 def apply_labels(c, labels):
