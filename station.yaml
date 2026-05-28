@@ -1,6 +1,10 @@
-# station.yaml — the single source of configurable truth for this deployment.
-# Secrets (MQTT account passwords, ACME email) stay in .env; configuration and
-# customization live here.
+# station.yaml — MAST Buoy deployment.
+#
+# Replicates the customization that the sailingcenter/mast-buoy repo achieves
+# with hand-maintained patches against weewx.conf + fuzzy-archer templates.
+# Driver path: MQTTSubscribe (the buoy firmware publishes MQTT to the broker,
+# either directly or via a bridge; on this branch a synthetic mast-publisher
+# service stands in for the firmware).
 #
 # Read by configure.py at first-run bootstrap. To re-apply after editing:
 #     ./scripts/apply.sh           # (or just: docker compose restart weewx --
@@ -12,197 +16,322 @@
 
 # ── Identity ───────────────────────────────────────────────────────────────
 station:
-  location: "Sailing Center"
-  latitude: 37.808
-  longitude: -122.409
+  location: "MAST Buoy"
+  latitude: 43.036583
+  longitude: -87.846067
   altitude:
-    value: 3
-    unit: foot                 # foot | meter
-  archive_interval: 60         # seconds (rtl_433 sensors transmit every ~9-16 s)
-  # IANA tz name (e.g. "America/Chicago", "Europe/London"). Picked up by the
-  # entrypoint before weewxd starts, so all timestamps -- current readings,
-  # archive records, news dates, the dashboard's "Last update" -- render in
-  # this zone. Defaults to the container's TZ (UTC for the python:3-slim base);
-  # the TZ env var on the weewx service (if set) takes precedence.
-  # timezone: "America/Chicago"
+    value: 176
+    unit: meter
+  archive_interval: 60
+  timezone: "America/Chicago"   # picked up by entrypoint.sh before weewxd starts
 
-# ── MQTT broker (the driver subscribes and publish writes here) ───────────
+# ── MQTT broker ────────────────────────────────────────────────────────────
 mqtt:
-  broker: mqtt                 # docker service name; reachable over the docker network
+  broker: mqtt
   port: 1883
-  # WebSocket URL embedded in the public dashboard for live gauges. The
-  # WEEWX_WS_URL env var (set by overlays — prod uses wss://${DOMAIN}) wins
-  # over this value when present.
   websocket_url: "ws://localhost:9001"
 
-# ── Data ingestion (rtl_433 → WeeWX fields) ───────────────────────────────
-# Edit `sources` to match your sensors. Defaults describe a Fine Offset WS80
-# primary station and an Ambient Weather WH31B thermo-hygrometer relayed by
-# OpenMQTTGateway. See README "Multiple sensors" for the per-source schema.
+# ── Custom observations (MAST-specific, registered before sensors validate) ─
+observations:
+  - { name: currentDir,         group: group_direction }
+  - { name: currentSpeed,       group: group_speed }
+  - { name: gpsAltitude,        group: group_altitude }
+  - { name: gpsLatitude,        group: group_angle }
+  - { name: gpsLongitude,       group: group_angle }
+  - { name: rxFrequencyError,   group: group_frequency }
+  - { name: rxRSSI,             group: group_dbm }       # custom unit group (below)
+  - { name: rxSNR,              group: group_db }
+  - { name: waterTemp,          group: group_temperature }
+  - { name: waveDir,            group: group_direction }
+  - { name: waveDominantPeriod, group: group_deltatime }
+  - { name: waveMeanHeight,     group: group_altitude }
+  - { name: waveMeanHeightHighestTenth, group: group_altitude }
+  - { name: waveSignificantHeight, group: group_altitude }
+  - { name: waveMaximumHeight,  group: group_altitude }
+
+# ── Custom DB schema (wview_extended + MAST columns) ──────────────────────
+schema:
+  extends: wview_extended
+  extra_columns:
+    - currentDir
+    - currentSpeed
+    - gpsAltitude
+    - gpsLatitude
+    - gpsLongitude
+    - rxFrequencyError
+    - rxRSSI
+    - rxSNR
+    - waterTemp
+    - waveDir
+    - waveDominantPeriod
+    - waveMeanHeight
+    - waveMeanHeightHighestTenth
+    - waveSignificantHeight
+    - waveMaximumHeight
+
+# ── Data ingestion (synthetic mast-publisher → real buoy firmware later) ──
 sensors:
-  unit_system: US              # US | METRIC | METRICWX
+  unit_system: US
   sources:
-    - name: primary
-      topic: home/+/RTL_433toMQTT/Fineoffset-WS80/+
+    - name: buoy
+      topic: home/buoy/mast
+      ignore_unmapped: true
       fields:
-        temperature_C: { name: outTemp,     units: degree_C }
-        humidity:      { name: outHumidity }
-        wind_avg_m_s:  { name: windSpeed,   units: meter_per_second }
-        wind_max_m_s:  { name: windGust,    units: meter_per_second }
-        wind_dir_deg:  { name: windDir }
-        uvi:           { name: UV }
-        rain_mm:       { name: rain, units: mm, contains_total: true }   # WS90 only
-    - name: wh31b-ch1
-      topic: home/+/RTL_433toMQTT/AmbientWeather-WH31B/+
-      msg_id_field: channel    # field per channel: temperature_C_<n>, humidity_<n>
-      fields:
-        temperature_C_1: { name: extraTemp1, units: degree_C }
-        humidity_1:      { name: extraHumid1 }
+        # wind in knots (publisher native) -> MQTTSubscribe converts to MPH (US storage)
+        windSpeed_kn:    { name: windSpeed,   units: knot }
+        windGust_kn:     { name: windGust,    units: knot }
+        windDir:         { name: windDir }
+        # currents in knots
+        currentSpeed_kn: { name: currentSpeed, units: knot }
+        currentDir:      { name: currentDir }
+        # waves: heights in feet (US default for group_altitude), period in seconds
+        waveHeight_ft:   { name: waveMaximumHeight, units: foot }
+        wavePeriod_s:    { name: waveDominantPeriod, units: second }
+        # GPS: degrees (group_angle default)
+        gpsLat:          { name: gpsLatitude }
+        gpsLon:          { name: gpsLongitude }
+        # Receiver telemetry: custom group_dbm + standard group_db
+        rxRSSI:          { name: rxRSSI }
+        rxSNR:           { name: rxSNR }
+        # Water temp in °F (US default for group_temperature)
+        waterTemp:       { name: waterTemp }
 
-# ── Quality-control bounds (drop spoofed / out-of-range / inf/nan values) ─
-# weewx ships defaults for outTemp/outHumidity/windSpeed/barometer/etc.; the
-# rest of this stack's observations get bounded here. Tune to your climate.
+# ── Display ────────────────────────────────────────────────────────────────
+units:
+  groups:
+    group_speed: knot               # show wind / current as knots, not mph
+  custom_groups:
+    group_dbm: dBm                  # rxRSSI uses this; same unit across US/Metric/MetricWX
+
+labels:
+  currentSpeed:      "Current Speed"
+  currentDir:        "Current Direction"
+  gpsLatitude:       "Latitude"
+  gpsLongitude:      "Longitude"
+  rxSNR:             "rx SNR"
+  rxRSSI:            "rx RSSI"
+  waveMaximumHeight: "Wave Height"
+  waveDir:           "Wave Direction"
+  waveDominantPeriod: "Wave Period"
+
+# ── QC ─────────────────────────────────────────────────────────────────────
 qc:
-  windGust:    { min: 0,   max: 120, unit: mile_per_hour }
-  windDir:     { min: 0,   max: 360, unit: degree_compass }
-  UV:          { min: 0,   max: 20 }
-  extraTemp1:  { min: -40, max: 120, unit: degree_F }    # WH31B
-  extraHumid1: { min: 0,   max: 100 }
+  windSpeed:         { min: 0,    max: 100,   unit: knot }
+  windGust:          { min: 0,    max: 120,   unit: knot }
+  windDir:           { min: 0,    max: 360,   unit: degree_compass }
+  currentSpeed:      { min: 0,    max: 10,    unit: knot }
+  currentDir:        { min: 0,    max: 360,   unit: degree_compass }
+  waveMaximumHeight: { min: 0,    max: 30,    unit: foot }
+  waveDominantPeriod: { min: 0,   max: 60,    unit: second }
+  waterTemp:         { min: 30,   max: 110,   unit: degree_F }
 
-# ── Calibration / derived corrections ([StdCalibrate][[Corrections]]) ──────
-# Per-obs Python expressions over the same record's fields (+ the `math`
-# module), applied on loop + archive. Two uses:
-#   * adjust a reading for a known offset (sensor / mounting), e.g.
-#       windDir: "(windDir + 7) % 360"   # correct a misaligned mast
-#       outTemp: "outTemp - 0.4"
-#   * derive a new obs (StdCalibrate creates it; absent inputs are skipped),
-#     e.g. estimate solar radiation from a lux-only WS90:
-#       radiation: "luminosity * 0.0079"   # ~ lux / 126.7 (W/m^2)
-# Use ["expr", "loop"|"archive"] to restrict to one. Expressions must not
-# contain a comma (StdCalibrate splits expr,directive on commas).
-#
-# calibrate:
-#   windDir: "(windDir + 7) % 360"
+# ── Dashboard (fuzzy-archer skin overrides) ───────────────────────────────
+dashboard:
+  navigation:   [index, stats, history, news, about]
+  station_info: [location, sunRiseSet, moonphase, uptime]
 
-# ── Optional sections ─────────────────────────────────────────────────────
-#
-# observations: []        # custom obs types -> generated user/extra_obs.py
-# schema: { ... }         # custom DB schema -> generated user/extra_schema.py
-# units: { ... }          # display unit overrides per unit group
-# labels: { ... }         # [Labels][Generic] display-name overrides
-# datetime_formats: {...} # date/time format strings
-#
-# branding:               # user-provided files copied into the skin (./branding/)
-#   site_name: "Your Org"               # informational; for your own HTML to reference
-#   site_url:  "https://example.org"
-#   logo:     logo.png                   # -> skins/Bootstrap/images/logo.png
-#   images:                              # extras copied to skins/Bootstrap/images/
-#     - deployment.jpg
-#   fragments:                           # HTML/template partials -> skins/Bootstrap/<name>
-#     - nav.html.inc                     #   override the skin's nav
-#     - foot.html.inc                    #   override the skin's footer
-#     - livegauges.html.inc              #   override the gauge column
-#     - about.html.tmpl                  #   override the generated About page
-#     - radar.html.inc                   #   extra partial #include'd by another fragment
-#                                        # (basename must match what the skin references; an
-#                                        #  entry WITH a subpath like js/charts.js lands there,
-#                                        #  overwriting that shipped skin file -- escape hatch)
-#
-# logging:                # [Logging] section -- handlers + formatters + root
-#   root:
-#     level: INFO
-#     handlers: [console, timed_rotate]
-#   handlers:
-#     timed_rotate:
-#       class: logging.handlers.TimedRotatingFileHandler
-#       level: DEBUG
-#       formatter: verbose
-#       filename: "logs/{process_name}.log"
-#       when: midnight
-#       backupCount: 7
-#   # formatters: { ... }   # optional, weewx defines "verbose" and "simple" already
-#
-# services:               # extra entries in weewx's *_services chains;
-#   prep:    [user.mast_obs.MASTObservations]   # files must live in ./user/<name>.py
-#   data:    []
-#   restful: []
+  stats:
+    # Matches mast-buoy's effective stats_items (their patched line has `wind #, …`
+    # which configobj treats as a comment after the first item). The aggregations
+    # below describe how the custom obs *would* display if added to items.
+    items: [wind]
+    aggregations:
+      outHumidity:       [avg]
+      currentSpeed:      [avg]
+      currentDir:        [avg]
+      waveMaximumHeight: [avg]
+      waveDir:           [avg]
 
-# ── Dashboard overrides (fuzzy-archer skin) ───────────────────────────────
-# Each subsection overrides the same-named section in skin.conf. Omit a key to
-# keep the skin's default. Omit `dashboard:` entirely to keep ALL the defaults.
-# Re-runs of configure.py are idempotent (sections are cleared and rebuilt).
-#
-# Uncomment and adjust:
-#
-# dashboard:
-#   # History window (hours) for the live charts + the wind rose overlay's
-#   # "recent" cutoff + the browser-side data rotation (older points shift off
-#   # the front as new MQTT samples arrive). One value drives all three; the
-#   # skin's default is 27 -- drop to 3-6 for a "current conditions" dashboard,
-#   # raise to 48-72 for trend analysis. Whole hours only.
-#   timespan: 27
-#
-#   # Top nav + sidebar
-#   navigation:   [index, stats, history, news, about]
-#   station_info: [location, sunRiseSet, moonphase, uptime]
-#
-#   # Stats / history tabs
-#   stats:
-#     items: [wind, outTemp, outHumidity]
-#     aggregations:
-#       outHumidity: [avg]               # adds [[[[outHumidity]]]] [[[[[avg]]]]]
-#   history:
-#     items: [max_wind, NOAA]
-#
-#   # News entries (one [[[[<title>]]]] subsection each)
-#   news:
-#     - date: "May 5, 2025"              # used as the subsection title
-#       header: "Buoy Deployed"
-#       body:   "The Marquette team deployed the buoy in calm conditions."
-#       img:    { src: "images/deployment.jpg", alt: "Buoy crew" }
-#
-#   # Browser-side gauges. `range:` and `payload_key` are semantic; everything
-#   # under `style:` (and any extra top-level keys on a gauge) passes through to
-#   # fuzzy-archer verbatim -- see skin.conf [LiveGauges] for the full key list.
-#   live_gauges:
-#     items: [windSpeed, windDir]        # ordering; defaults to keys of `gauges`
-#     gauges:
-#       windSpeed:
-#         payload_key: windSpeed_knot    # match your unit_system / [StdConvert]
-#         range: { min: 0, max: 50, splitnumber: 10 }
-#         style:
-#           lineColor:      ["#428bca", "#b44242"]
-#           lineColorUntil: [22, maxvalue]   # strong-breeze threshold
-#           decimals: 1
-#       windDir:                         # circular direction gauge
-#         payload_key: windDir
-#         style: { lineColorN: "#428bca", lineColorS: "#b44242", decimals: 0 }
-#
-#   # Browser-side line/scatter charts. Two-level nesting: chart -> series.
-#   live_charts:
-#     items: [wind]
-#     show_daynight: true                # any chart-level keys pass through
-#     charts:
-#       wind:
-#         series:
-#           - { obs: windSpeed, payload_key: windSpeed_mph, style: { decimals: 0 } }
-#           - { obs: windGust,  payload_key: windGust_mph,  style: { showMaxMarkPoint: true } }
-#
-#   # Static day/week/month/year PNG plots from weewx's ImageGenerator.
-#   image_plots:
-#     common:                            # keys at [[[ImageGenerator]]] root
-#       daynight_day_color:   "0xffffff"
-#       daynight_night_color: "0xf0f0f0"
-#     day:
-#       style: { line_type: "none", marker_size: 3, marker_type: "cross" }
-#       items:
-#         dayWind:    { yscale: [0, null, 1.0], series: [windSpeed] }
-#         dayWindDir: { yscale: [0, 360, 45.0], series: [windDir] }
-#     week:
-#       style: { aggregate_interval: 600 }
-#       items:
-#         weekWind:
-#           yscale: [0, null, 1.0]
-#           series:
-#             - windSpeed                # bare obs name -> empty subsection
-#             - { obs: windGust, aggregate_type: max }
+  history:
+    items: [max_wind, NOAA]
+
+  news:
+    - date: "May 5, 2025"
+      header: "Buoy Deployed"
+      body:   "The Marquette University team successfully deployed the buoy in calm conditions with the help of University of Wisconsin Milwaukee's Neeskay and Captain Max."
+      img:
+        src:   "images/2025_Deployment_Prep_Electronics.jpg"
+        alt:   "Students working on the buoy electronics"
+        title: "Electronics Prep"
+    - date: "June 21, 2024"
+      header: "Antenna Upgrade"
+      body:   "The receiver antenna at the sailing center was replaced with a higher gain antenna to improve signal reception."
+    - date: "May 12, 2024"
+      header: "MAST Buoy Deployed!"
+      body:   "The Marquette University team successfully deployed the buoy in rough sea conditions."
+
+  live_gauges:
+    items: [windDir, windSpeed, currentDir, currentSpeed, waveMaximumHeight, waveDominantPeriod]
+    gauges:
+      windDir:
+        payload_key: windDir
+        style: { lineColorN: "#428bca", lineColorS: "#428bca", decimals: 0, stuckNeedleEnabled: false }
+      windSpeed:
+        payload_key: windSpeed_mph                    # MQTTPublish emits with _mph suffix
+        range: { min: 0, max: 50, splitnumber: 10 }
+        style:
+          lineColor:      ["#428bca", "#b44242"]
+          lineColorUntil: [25, maxvalue]              # strong-breeze threshold (mph)
+          decimals: 1
+          stuckNeedleEnabled: false
+      currentDir:
+        payload_key: currentDir
+        style: { lineColorN: "#428bca", lineColorS: "#428bca", decimals: 0, stuckNeedleEnabled: false }
+      currentSpeed:
+        payload_key: currentSpeed_mph                 # MQTTPublish emits with _mph suffix
+        range: { min: 0, max: 4, splitnumber: 8 }
+        style:
+          lineColor:      ["#428bca", "#b44242"]
+          lineColorUntil: [1.5, maxvalue]
+          decimals: 2
+          stuckNeedleEnabled: false
+      waveMaximumHeight:
+        payload_key: waveMaximumHeight_foot           # group_altitude US unit
+        range: { min: 0, max: 10, splitnumber: 10 }
+        style:
+          lineColor:      ["#428bca", "#b44242"]
+          lineColorUntil: [3, maxvalue]
+          decimals: 1
+          stuckNeedleEnabled: false
+      waveDominantPeriod:
+        payload_key: waveDominantPeriod_second        # group_deltatime US unit
+        range: { min: 0, max: 10, splitnumber: 10 }
+        style:
+          lineColor:      ["#428bca", "#b44242"]
+          lineColorUntil: [5, maxvalue]
+          decimals: 1
+          stuckNeedleEnabled: false
+
+  live_charts:
+    # NOTE: MQTTPublish emits keys with unit-system suffix (append_unit_label=true),
+    # so payload_key must match the published key, not the bare obs name.
+    items: [windSpeed, windDir, currentSpeed, currentDir, waveMaximumHeight, waveDominantPeriod, gpsLatitude, gpsLongitude, rx]
+    charts:
+      windSpeed:
+        series:
+          - { obs: windSpeed,    payload_key: windSpeed_mph,
+              style: { showMaxMarkPoint: true, showMinMarkPoint: true, showAvgMarkLine: false,
+                       lineColor: "#428bca", lineWidth: 0, symbol: circle, symbolSize: 3, decimals: 1 } }
+      windDir:
+        series:
+          - { obs: windDir, payload_key: windDir, style: { symbolSize: 3 } }
+      currentSpeed:
+        series:
+          - { obs: currentSpeed, payload_key: currentSpeed_mph,
+              style: { showMaxMarkPoint: true, showMinMarkPoint: true, showAvgMarkLine: false,
+                       lineColor: "#428bca", lineWidth: 0, symbol: circle, symbolSize: 3, decimals: 2 } }
+      currentDir:
+        series:
+          - { obs: currentDir, payload_key: currentDir,
+              style: { lineColor: "#428bca", lineWidth: 0, symbol: circle, symbolSize: 3, decimals: 0 } }
+      waveMaximumHeight:
+        series:
+          - { obs: waveMaximumHeight, payload_key: waveMaximumHeight_foot,
+              style: { showMaxMarkPoint: true, showMinMarkPoint: true,
+                       lineColor: "#428bca", lineWidth: 0, symbol: circle, symbolSize: 3, decimals: 1 } }
+      waveDominantPeriod:
+        series:
+          - { obs: waveDominantPeriod, payload_key: waveDominantPeriod_second,
+              style: { showMaxMarkPoint: true, showMinMarkPoint: true,
+                       lineColor: "#428bca", lineWidth: 0, symbol: circle, symbolSize: 3, decimals: 0 } }
+      gpsLatitude:
+        series:
+          - { obs: gpsLatitude, payload_key: gpsLatitude_degree_angle,
+              style: { lineColor: "#428bca", lineWidth: 0, symbol: circle, symbolSize: 3, decimals: 4 } }
+      gpsLongitude:
+        series:
+          - { obs: gpsLongitude, payload_key: gpsLongitude_degree_angle,
+              style: { lineColor: "#428bca", lineWidth: 0, symbol: circle, symbolSize: 3, decimals: 4 } }
+      rx:
+        series:
+          - { obs: rxSNR,  payload_key: rxSNR_dB,
+              style: { lineColor: "#428bca", lineWidth: 0, symbol: circle, symbolSize: 3, decimals: 0 } }
+          - { obs: rxRSSI, payload_key: rxRSSI_dBm,
+              style: { lineColor: "#b44242", lineWidth: 0, symbol: circle, symbolSize: 3, decimals: 0 } }
+
+  image_plots:
+    common:
+      daynight_day_color:   "0xffffff"
+      daynight_night_color: "0xf0f0f0"
+      daynight_edge_color:  "0xf5f5f5"
+    day:
+      style: { line_type: "none", marker_size: 3, marker_type: "cross" }
+      items:
+        dayWind-Bootstrap:        { yscale: [0,    null, 1.0],  series: [windSpeed] }
+        dayWindDir-Bootstrap:     { yscale: [0,    360,  45.0], series: [windDir] }
+        dayCurrentSpeed-Bootstrap: { yscale: [0,    null, 0.1],  series: [currentSpeed] }
+        dayCurrentDir-Bootstrap:  { yscale: [0,    360,  45.0], series: [currentDir] }
+        dayWaveHeight-Bootstrap:  { yscale: [0,    null, 0.1],  series: [waveMaximumHeight] }
+        dayWavePeriod-Bootstrap:  { yscale: [0,    360,  45.0], series: [waveDominantPeriod] }
+        dayGpsLatitude-Bootstrap: { yscale: [null, null, 0.001], series: [gpsLatitude] }
+        dayGpsLongitude-Bootstrap: { yscale: [null, null, 0.001], series: [gpsLongitude] }
+        daySNR-Bootstrap:         { yscale: [null, null, 3.0],  series: [rxSNR] }
+        dayRSSI-Bootstrap:        { yscale: [null, null, 3.0],  series: [rxRSSI] }
+    week:
+      style: { line_type: "none", marker_size: 3, marker_type: "cross", aggregate_interval: 600 }
+      items:
+        weekWind-Bootstrap:
+          yscale: [0, null, 1.0]
+          series:
+            - windSpeed
+            - { obs: windGust, aggregate_type: max }
+        weekWindDir-Bootstrap:     { yscale: [0,    360,  45.0], series: [windDir] }
+        weekCurrentSpeed-Bootstrap: { yscale: [0,    null, 0.1],  series: [currentSpeed] }
+        weekCurrentDir-Bootstrap:  { yscale: [0,    360,  45.0], series: [currentDir] }
+        weekWaveHeight-Bootstrap:  { yscale: [0,    null, 0.1],  series: [waveMaximumHeight] }
+        weekWavePeriod-Bootstrap:  { yscale: [0,    360,  45.0], series: [waveDominantPeriod] }
+        weekGpsLatitude-Bootstrap: { yscale: [null, null, 0.001], series: [gpsLatitude] }
+        weekGpsLongitude-Bootstrap: { yscale: [null, null, 0.001], series: [gpsLongitude] }
+        weekSNR-Bootstrap:
+          yscale: [null, null, 3.0]
+          aggregate_type: none
+          series: [rxSNR]
+        weekRSSI-Bootstrap:
+          yscale: [null, null, 3.0]
+          aggregate_type: none
+          series: [rxRSSI]
+    month:
+      items:
+        monthwind-Bootstrap:    { series: [windSpeed] }
+        monthwinddir-Bootstrap: { series: [windDir] }
+    year:
+      items:
+        yearwind-Bootstrap:    { series: [windSpeed] }
+        yearwinddir-Bootstrap: { series: [windDir] }
+
+  # Ensure images in skins/Bootstrap/images/ get copied to public_html on every run.
+  copy:
+    always: [images/*]
+
+# ── Branding (custom HTML + logos) ────────────────────────────────────────
+branding:
+  site_name: "MAST Buoy"
+  site_url:  "https://sailingcenter.org"
+  images:
+    - images/MAST_color_logo.jpg
+    - images/mcsc_2023_logo_629x104.png
+    - images/2025_Deployment_Prep_Electronics.jpg
+  fragments:                                    # HTML/template partials -> skin root
+    - nav.html.inc                              # MAST navbar
+    - foot.html.inc                             # MAST footer
+    - livegauges.html.inc                       # gauge column
+    - about.html.tmpl                           # MAST About page (generated page)
+
+# ── Logging (file rotation, like mast-buoy) ───────────────────────────────
+logging:
+  root:
+    level: DEBUG
+    handlers: [console, timed_rotate]
+  handlers:
+    console:
+      class: logging.StreamHandler
+      level: DEBUG
+      formatter: verbose
+      stream: ext://sys.stdout
+    timed_rotate:
+      class: logging.handlers.TimedRotatingFileHandler
+      level: DEBUG
+      formatter: verbose
+      filename: "logs/{process_name}.log"
+      when: midnight
+      backupCount: 7

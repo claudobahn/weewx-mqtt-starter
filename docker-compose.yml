@@ -117,6 +117,29 @@ services:
       - ./data/public_html:/srv:ro
 
   # ----------------------------------------------------------------------
+  # mast-publisher (BRANCH-SPECIFIC): synthetic MAST buoy data source.
+  # Publishes realistic JSON to home/buoy/mast every ~16 s as the omg account,
+  # standing in for the buoy firmware until real hardware (or a bridge from
+  # whatever transport the firmware uses) publishes to the same topic. Stop /
+  # remove this service once real data is flowing.
+  # ----------------------------------------------------------------------
+  mast-publisher:
+    image: eclipse-mosquitto:2.0.22
+    container_name: weewx-mast-publisher
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      mqtt:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/publisher/publish-mast.sh"]
+    volumes:
+      - ./mast-publisher:/publisher:ro
+    environment:
+      MQTT_HOST: mqtt
+      MQTT_USER: ${MQTT_OMG_USER:-}
+      MQTT_PASS: ${MQTT_OMG_PASS:-}
+
+  # ----------------------------------------------------------------------
   # MQTTX Web: browser-based MQTT client for inspecting/publishing. Opt-in dev
   # tool (publish-capable) -- NOT started by default. Run it with:
   #   docker compose --profile tools up -d mqtt-ui
