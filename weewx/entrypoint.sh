@@ -19,7 +19,7 @@ fi
 if [ ! -f "${CONF}" ]; then
   echo "First run: seeding ${WEEWX_ROOT} from the baked station template."
   cp -a /opt/station/. "${WEEWX_ROOT}/"
-  # configure.py reads creds + sensor map from the environment / sensors.yaml.
+  # configure.py reads creds from the environment + config from station.yaml.
   # If it fails, roll back the seeded conf so the next start retries cleanly
   # instead of running an unconfigured (Simulator) station.
   if ! python /configure.py; then

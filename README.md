@@ -20,7 +20,7 @@ The base stack is a **template** (point it at a real OMG). Layers on top: a
 data), **production** (`docker-compose.prod.yml`, Caddy + TLS), and an end-to-end
 pipeline test (`./e2e-test.sh`). See [Quick start](#quick-start).
 
-Sensor → WeeWX field mappings live in [`sensors.yaml`](sensors.yaml) — see [Multiple sensors](#multiple-sensors-sensorsyaml).
+Everything customizable about this deployment — station identity, sensors, QC bounds, units, labels, dashboard layout, branding — lives in a single [`station.yaml`](station.yaml). See [Customization](#customization-stationyaml).
 
 WeeWX extensions (from the [`weewx-mqtt`](https://github.com/weewx-mqtt) org):
 
@@ -81,7 +81,7 @@ The base stack is a template; demo and production sit on top as overlays:
 The **demo** layer swaps in WeeWX's built-in Simulator driver — a full set of
 synthetic observations (temperature, barometer, wind, rain) with no MQTT/RF
 source, so every gauge populates. The **e2e test** is the opposite: it injects
-real rtl_433-shaped JSON through the actual driver + `sensors.yaml` mapping +
+real rtl_433-shaped JSON through the actual driver + `station.yaml` mapping +
 publish path (exactly what the Simulator bypasses). The driver is chosen at
 first-run bootstrap, so switch layers on a fresh `./data`.
 
@@ -133,13 +133,12 @@ The repo carries no proxy configuration.
 
 Run inside the container (`docker compose run --rm --entrypoint python weewx /configure.py`):
 
-- **Station** — location/lat/lon/altitude (default: a coastal "Sailing Center";
-  override with `STATION_LOCATION`/`STATION_LATITUDE`/`STATION_LONGITUDE`/
-  `STATION_ALTITUDE` in `.env`), `station_type = MQTTSubscribeDriver`, software
-  record generation, and a 60-second archive interval (the WS80/WS90 transmit
-  every ~9–16 s).
-- **`[MQTTSubscribeDriver]`** — the **primary driver**, built entirely from
-  [`sensors.yaml`](sensors.yaml) (see [Multiple sensors](#multiple-sensors-sensorsyaml)).
+- **Station** — location/lat/lon/altitude (from `station.yaml`'s `station:`
+  block; defaults describe a coastal "Sailing Center"), `station_type =
+  MQTTSubscribeDriver`, software record generation, and a 60-second archive
+  interval (the WS80/WS90 transmit every ~9–16 s).
+- **`[MQTTSubscribeDriver]`** — the **primary driver**, built from
+  `station.yaml`'s `sensors:` block (see [Customization](#customization-stationyaml)).
   Each rtl_433 field maps to a WeeWX observation with per-field input `units`
   (rtl_433 is metric; the topic `unit_system` is US, so MQTTSubscribe converts).
 - **`[MQTTPublish]`** — `enable=true`, `host=mqtt`, topic `weather/loop`
@@ -181,7 +180,7 @@ docker compose exec mqtt mosquitto_sub -u "$MQTT_DASH_USER" -P "$MQTT_DASH_PASS"
 
 # Watch raw OMG / rtl_433 messages (everything OMG publishes, exactly as it
 # arrives -- the most useful view for discovering a new sensor or debugging
-# field mappings in sensors.yaml). Tee to a file to keep them:
+# field mappings in station.yaml). Tee to a file to keep them:
 #   ... -t 'home/#' -v | tee /tmp/omg.log
 docker compose exec mqtt mosquitto_sub -u "$MQTT_WEEWX_USER" -P "$MQTT_WEEWX_PASS" -t 'home/#' -v
 
@@ -346,39 +345,64 @@ The base template already runs the MQTTSubscribe driver, so there's nothing to
 2. **Confirm the topic + fields** the device actually sends:
    `set -a; . ./.env; set +a; docker compose exec mqtt mosquitto_sub -u "$MQTT_WEEWX_USER" -P "$MQTT_WEEWX_PASS" -t 'home/#' -v`. The WS80/WS90 land on
    `home/<omg>/RTL_433toMQTT/Fineoffset-WS80|WS90/<id>`.
-3. **Edit [`sensors.yaml`](sensors.yaml)** to match what you saw in step 2 — set
-   the model in the topic (`Fineoffset-WS90`), and add/adjust sensor entries.
-   Re-apply with `docker compose run --rm --entrypoint python weewx /configure.py
-   && docker compose restart weewx` (or a fresh `./setup.sh`).
+3. **Edit [`station.yaml`](station.yaml)** — the `sensors:` block — to match
+   what you saw in step 2: set the model in the topic (e.g. `Fineoffset-WS90`)
+   and add/adjust sensor entries. Re-apply with `docker compose run --rm
+   --entrypoint python weewx /configure.py && docker compose restart weewx`
+   (or a fresh `./setup.sh`).
 
 Notes: a WS80 provides no rain or barometric pressure (pressure normally comes
 from an Ecowitt console, not the RF sensor), so those gauges stay empty; a WS90
-adds rain. rtl_433 reports metric — the per-field `units` in `sensors.yaml`
-handle the conversion to US.
+adds rain. rtl_433 reports metric — the per-field `units` in `station.yaml`'s
+`sensors:` block handle the conversion to US.
 
-## Multiple sensors (`sensors.yaml`)
+## Customization (`station.yaml`)
 
-The driver's field mappings are declarative — edit [`sensors.yaml`](sensors.yaml),
-not Python or `weewx.conf`. `configure.py` translates it into
-`[MQTTSubscribeDriver]` and validates every `units`/`name` against WeeWX (a typo
-fails setup with a clear message). Each entry is one rtl_433 sensor:
+[`station.yaml`](station.yaml) is the single source of configurable truth for
+this deployment. `configure.py` compiles it into `weewx.conf` + `skin.conf`
+(and, when set, generated `user/extra_obs.py` / `user/extra_schema.py`) at
+first-run bootstrap. Secrets stay in `.env` — everything else is here.
+
+Top-level sections:
+
+| Section | What it drives |
+|---|---|
+| `station` | location, lat/lon/altitude, `archive_interval` |
+| `mqtt` | broker host/port and the browser-facing WebSocket URL |
+| `sensors` | rtl_433 → WeeWX field map (the `[MQTTSubscribeDriver][[topics]]` content) |
+| `qc` | `[StdQC][[MinMax]]` bounds per observation (spoofing mitigation) |
+| `observations` *(opt)* | new obs types — generates `user/extra_obs.py` + registers `obs_group_dict` |
+| `schema` *(opt)* | extra DB columns — generates `user/extra_schema.py` extending the stock schema |
+| `units` *(opt)* | force display units per group + define brand-new unit groups |
+| `labels` *(opt)* | per-observation display labels (`[Labels][Generic]`) |
+
+Re-apply after editing (the first-run bootstrap is skipped once
+`data/weewx.conf` exists):
+
+```bash
+docker compose run --rm --entrypoint python weewx /configure.py && \
+  docker compose restart weewx
+```
+
+The `sensors:` block follows the per-rtl_433-sensor shape:
 
 ```yaml
-unit_system: US
 sensors:
-  - name: primary
-    topic: home/+/RTL_433toMQTT/Fineoffset-WS80/+   # WS90 in production
-    fields:
-      temperature_C: { name: outTemp, units: degree_C }
-      wind_avg_m_s:  { name: windSpeed, units: meter_per_second }
-      rain_mm:       { name: rain, units: mm, contains_total: true }  # WS90
-      # ...
-  - name: wh31b-ch1
-    topic: home/+/RTL_433toMQTT/AmbientWeather-WH31B/+
-    msg_id_field: channel                # distinguish channels (stable across battery swaps)
-    fields:
-      temperature_C_1: { name: extraTemp1, units: degree_C }  # channel 1
-      humidity_1:      { name: extraHumid1 }
+  unit_system: US
+  sources:
+    - name: primary
+      topic: home/+/RTL_433toMQTT/Fineoffset-WS80/+   # WS90 in production
+      fields:
+        temperature_C: { name: outTemp, units: degree_C }
+        wind_avg_m_s:  { name: windSpeed, units: meter_per_second }
+        rain_mm:       { name: rain, units: mm, contains_total: true }  # WS90
+        # ...
+    - name: wh31b-ch1
+      topic: home/+/RTL_433toMQTT/AmbientWeather-WH31B/+
+      msg_id_field: channel                # distinguish channels (stable across battery swaps)
+      fields:
+        temperature_C_1: { name: extraTemp1, units: degree_C }  # channel 1
+        humidity_1:      { name: extraHumid1 }
 ```
 
 Key points, each verified end-to-end:
@@ -401,15 +425,6 @@ Key points, each verified end-to-end:
   own loop packet, so `weather/loop` shows one sensor at a time; WeeWX merges
   them into a single archive record.
 
-After editing `sensors.yaml`, re-apply it (the first-run bootstrap is skipped
-once `data/weewx.conf` exists, so re-running `./setup.sh` alone won't pick up
-edits):
-
-```bash
-docker compose run --rm --entrypoint python weewx /configure.py && \
-  docker compose restart weewx
-```
-
 ## Layout
 
 ```
@@ -424,8 +439,8 @@ mosquitto/acl                 # per-account topic permissions (passwd is generat
 caddy/Caddyfile               # the `web` server's dev config: plain HTTP on :8080
 caddy/Caddyfile.prod          # prod config: Let's Encrypt TLS (https) + wss + file_server
 cert-reload/reload.sh         # syncs Caddy's cert to mosquitto + SIGHUP (prod)
-configure.py                  # patches weewx.conf/skin.conf; builds driver from sensors.yaml
-sensors.yaml                  # rtl_433 -> WeeWX field mappings (edit this for your sensors)
+configure.py                  # compiles station.yaml into weewx.conf/skin.conf
+station.yaml                  # the single source of configurable truth (edit this!)
 setup.sh                      # bootstrap (gen creds, build image, start)
 verify.sh                     # health check (pass/fail) of the running stack
 e2e-test.sh                   # e2e pipeline test: inject rtl_433 JSON, assert weather/loop

@@ -78,7 +78,7 @@ docker run --rm -v "${ROOT}/data:/data" alpine:3.22 sh -c 'chown -R 1000:1000 /d
 
 # --- bring up the stack; WeeWX self-bootstraps on first run -----------------
 # On first start the weewx container seeds ./data from the baked station
-# template and runs configure.py (creds + sensor map from .env / sensors.yaml);
+# template and runs configure.py (creds from .env, config from station.yaml);
 # thereafter it just runs weewxd. mqtt-ui stays opt-in (the `tools` profile).
 say "Starting the stack (first run bootstraps WeeWX automatically)"
 $DC up -d --remove-orphans
@@ -132,7 +132,7 @@ No data source is running, so the dashboard stays empty until data arrives:
     docker compose down && rm -rf data mosquitto/data
     COMPOSE_FILE=docker-compose.yml:docker-compose.demo.yml ./setup.sh
   Use real hardware: point your OpenMQTTGateway at this broker, then edit
-    sensors.yaml (see README "Using a real OpenMQTTGateway device").
+    station.yaml's sensors: block (README "Using a real OpenMQTTGateway device").
   Test the pipeline end-to-end: ./e2e-test.sh
 
 Health check: ./verify.sh

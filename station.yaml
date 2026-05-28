@@ -1,0 +1,74 @@
+# station.yaml — the single source of configurable truth for this deployment.
+# Secrets (MQTT account passwords, ACME email) stay in .env; configuration and
+# customization live here.
+#
+# Read by configure.py at first-run bootstrap. To re-apply after editing on an
+# existing stack:
+#     docker compose run --rm --entrypoint python weewx /configure.py
+#     docker compose restart weewx
+
+# ── Identity ───────────────────────────────────────────────────────────────
+station:
+  location: "Sailing Center"
+  latitude: 37.808
+  longitude: -122.409
+  altitude:
+    value: 3
+    unit: foot                 # foot | meter
+  archive_interval: 60         # seconds (rtl_433 sensors transmit every ~9-16 s)
+
+# ── MQTT broker (the driver subscribes and publish writes here) ───────────
+mqtt:
+  broker: mqtt                 # docker service name; reachable over the docker network
+  port: 1883
+  # WebSocket URL embedded in the public dashboard for live gauges. The
+  # WEEWX_WS_URL env var (set by overlays — prod uses wss://${DOMAIN}) wins
+  # over this value when present.
+  websocket_url: "ws://localhost:9001"
+
+# ── Data ingestion (rtl_433 → WeeWX fields) ───────────────────────────────
+# Edit `sources` to match your sensors. Defaults describe a Fine Offset WS80
+# primary station and an Ambient Weather WH31B thermo-hygrometer relayed by
+# OpenMQTTGateway. See README "Multiple sensors" for the per-source schema.
+sensors:
+  unit_system: US              # US | METRIC | METRICWX
+  sources:
+    - name: primary
+      topic: home/+/RTL_433toMQTT/Fineoffset-WS80/+
+      fields:
+        temperature_C: { name: outTemp,     units: degree_C }
+        humidity:      { name: outHumidity }
+        wind_avg_m_s:  { name: windSpeed,   units: meter_per_second }
+        wind_max_m_s:  { name: windGust,    units: meter_per_second }
+        wind_dir_deg:  { name: windDir }
+        uvi:           { name: UV }
+        rain_mm:       { name: rain, units: mm, contains_total: true }   # WS90 only
+    - name: wh31b-ch1
+      topic: home/+/RTL_433toMQTT/AmbientWeather-WH31B/+
+      msg_id_field: channel    # field per channel: temperature_C_<n>, humidity_<n>
+      fields:
+        temperature_C_1: { name: extraTemp1, units: degree_C }
+        humidity_1:      { name: extraHumid1 }
+
+# ── Quality-control bounds (drop spoofed / out-of-range / inf/nan values) ─
+# weewx ships defaults for outTemp/outHumidity/windSpeed/barometer/etc.; the
+# rest of this stack's observations get bounded here. Tune to your climate.
+qc:
+  windGust:    { min: 0,   max: 120, unit: mile_per_hour }
+  windDir:     { min: 0,   max: 360, unit: degree_compass }
+  UV:          { min: 0,   max: 20 }
+  extraTemp1:  { min: -40, max: 120, unit: degree_F }    # WH31B
+  extraHumid1: { min: 0,   max: 100 }
+
+# ── Optional sections (uncomment and fill in as needed) ───────────────────
+#
+# observations: []        # custom obs types -> generated user/extra_obs.py
+# schema: { ... }         # custom DB schema -> generated user/extra_schema.py
+# units: { ... }          # display unit overrides per unit group
+# labels: { ... }         # [Labels][Generic] display-name overrides
+# datetime_formats: {...} # date/time format strings
+#
+# dashboard: { ... }      # Phase 2: live gauges/charts/navigation/stats/news
+# branding: { ... }       # Phase 3: logo/about/nav/footer + site name + url
+# logging: { ... }        # Phase 3: weewx logging handlers
+# services: { ... }       # Phase 3: extra prep/data/restful services

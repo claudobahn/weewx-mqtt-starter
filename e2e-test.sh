@@ -4,7 +4,7 @@
 # Injects OpenMQTTGateway-shaped rtl_433 JSON (a Fine Offset WS80 + an
 # AmbientWeather WH31B) into the broker as the `omg` account, then asserts the
 # readings round-trip onto `weather/loop` as gauge-ready keys (outTemp_F,
-# extraTemp1_F). This exercises the actual driver + field mapping (sensors.yaml)
+# extraTemp1_F). This exercises the actual driver + field mapping (station.yaml)
 # + weewx-mqtt/publish path -- the part the Simulator-driver demo bypasses.
 #
 # Run against the base template (MQTTSubscribe driver) with the stack up:
