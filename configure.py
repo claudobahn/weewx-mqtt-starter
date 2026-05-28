@@ -38,6 +38,9 @@ SKIN_DIR = "/data/skins/Bootstrap"
 USER_DIR = "/data/bin/user"
 EXTRA_OBS = os.path.join(USER_DIR, "extra_obs.py")
 EXTRA_SCHEMA = os.path.join(USER_DIR, "extra_schema.py")
+EXTENSIONS_PY = os.path.join(USER_DIR, "extensions.py")
+EXT_HOOK_BEGIN = "# --- BEGIN station.yaml extra_obs hook (managed by configure.py) ---"
+EXT_HOOK_END = "# --- END station.yaml extra_obs hook ---"
 
 # Bind-mounted from the project root (see docker-compose.yml weewx volumes).
 BRANDING_DIR = "/branding"
@@ -250,13 +253,54 @@ def apply_labels(c, labels):
         lab[obs] = str(label)
 
 
+def _set_extensions_hook(enabled):
+    """Idempotently add/remove `import user.extra_obs` (with marker comments) in
+    user/extensions.py. That file is imported by the weewx engine BEFORE the
+    driver loads, so registrations fire in time for MQTTSubscribe to validate
+    custom-obs fields. Without this, even with extra_obs.py written, the driver
+    would init before the service loads and reject the custom obs as unknown.
+    """
+    if not os.path.exists(EXTENSIONS_PY):
+        return                                    # baked template missing -- nothing to do
+    with open(EXTENSIONS_PY) as f:
+        src = f.read()
+    # Strip any previous hook so we re-apply cleanly.
+    if EXT_HOOK_BEGIN in src and EXT_HOOK_END in src:
+        before, _, rest = src.partition(EXT_HOOK_BEGIN)
+        _, _, after = rest.partition(EXT_HOOK_END)
+        # Drop the trailing newline that was paired with EXT_HOOK_END.
+        src = before.rstrip() + ("\n" + after.lstrip("\n") if after.strip() else "\n")
+    if enabled:
+        block = (
+            "\n" + EXT_HOOK_BEGIN + "\n"
+            "# Loaded early (before driver init) so observations/custom unit groups\n"
+            "# declared in station.yaml are registered when the driver validates fields.\n"
+            "import user.extra_obs  # noqa: F401\n"
+            + EXT_HOOK_END + "\n"
+        )
+        src = src.rstrip() + block
+    with open(EXTENSIONS_PY, "w") as f:
+        f.write(src)
+
+
 def apply_observations(observations, custom_groups):
     """Write user/extra_obs.py registering obs_group_dict + (optional) custom unit groups.
+
+    Also updates the IN-PROCESS weewx.units dicts so a subsequent apply_*sensors*
+    call's validator (which checks `wx_name in weewx.units.obs_group_dict`) sees
+    the new observation names -- otherwise the user couldn't add a custom obs
+    and reference it from sensors: in the same station.yaml.
+
+    And adds a hook in user/extensions.py to `import user.extra_obs` so the
+    registrations fire at engine startup, before the driver loads. Without that
+    the driver would init first and reject the custom obs as unknown at RUNTIME
+    even though configure.py validation passes.
 
     Returns True if a service entry should be wired (always True when present).
     """
     if not observations and not custom_groups:
         remove_if_exists(EXTRA_OBS)
+        _set_extensions_hook(False)
         return False
 
     lines = [GENERATED_HEADER,
@@ -264,17 +308,21 @@ def apply_observations(observations, custom_groups):
              "from weewx.engine import StdService\n",
              "\n"]
     # Custom unit groups first (so per-obs registrations below can reference them).
+    sys_map = {"US": "USUnits", "Metric": "MetricUnits", "MetricWX": "MetricWXUnits"}
     for grp, units in (custom_groups or {}).items():
         # units may be a dict {US: dBm, Metric: dBm, MetricWX: dBm} or a single str.
         if isinstance(units, str):
             units = {"US": units, "Metric": units, "MetricWX": units}
         for system, unit in units.items():
-            sys_map = {"US": "USUnits", "Metric": "MetricUnits", "MetricWX": "MetricWXUnits"}[system]
-            lines.append(f"weewx.units.{sys_map}[{grp!r}] = {unit!r}\n")
+            attr = sys_map[system]
+            lines.append(f"weewx.units.{attr}[{grp!r}] = {unit!r}\n")
+            # Register in-process too so the sensors validator accepts this group.
+            getattr(weewx.units, attr)[grp] = unit
     for obs in observations or []:
         lines.append(
             f"weewx.units.obs_group_dict[{obs['name']!r}] = {obs['group']!r}\n"
         )
+        weewx.units.obs_group_dict[obs["name"]] = obs["group"]
     # Tiny no-op StdService so weewx.conf can list it under prep_services and
     # the module gets loaded (which is what runs the registrations above).
     lines += [
@@ -287,6 +335,7 @@ def apply_observations(observations, custom_groups):
     os.makedirs(USER_DIR, exist_ok=True)
     with open(EXTRA_OBS, "w") as f:
         f.writelines(lines)
+    _set_extensions_hook(True)
     return True
 
 
@@ -317,7 +366,12 @@ def apply_schema(c, schema_cfg):
     lines = [GENERATED_HEADER,
              f"# Extends weewx's built-in `{base}` schema with the columns below.\n",
              "\n",
-             f"from schemas.{base} import table as _base_table, day_summaries as _base_summaries\n",
+             "# Support both pip-installed weewx (weewx.schemas) and the weectl-style\n",
+             "# layout where schemas live at /data/bin/schemas (alongside /data/bin/user).\n",
+             "try:\n",
+             f"    from weewx.schemas.{base} import table as _base_table, day_summaries as _base_summaries\n",
+             "except ImportError:\n",
+             f"    from schemas.{base} import table as _base_table, day_summaries as _base_summaries\n",
              "\n",
              "_extras = [\n"]
     for col in extras:
@@ -528,7 +582,20 @@ def _emit_image_plots(boot, plots_cfg):
 
 
 DASHBOARD_SUBSECTIONS = ("Navigation", "StationInfo", "Stats", "HistoryReport",
-                         "News", "LiveGauges", "LiveCharts", "ImageGenerator")
+                         "News", "LiveGauges", "LiveCharts", "ImageGenerator",
+                         "CopyGenerator")
+
+
+def _emit_copy(boot, copy_cfg):
+    """[[[CopyGenerator]]] copy_always / copy_once (lists of file globs)."""
+    if not copy_cfg:
+        boot.pop("CopyGenerator", None)
+        return
+    s = _replace_section(boot, "CopyGenerator")
+    if "always" in copy_cfg:
+        s["copy_always"] = [str(x) for x in copy_cfg["always"]]
+    if "once" in copy_cfg:
+        s["copy_once"] = [str(x) for x in copy_cfg["once"]]
 
 
 # ─── branding (user-provided files copied into the skin) ──────────────────
@@ -664,6 +731,7 @@ def apply_dashboard(c, dashboard):
     _emit_live_gauges(boot,  dashboard.get("live_gauges"))
     _emit_live_charts(boot,  dashboard.get("live_charts"))
     _emit_image_plots(boot,  dashboard.get("image_plots"))
+    _emit_copy(boot,         dashboard.get("copy"))
 
 
 def apply_skin(yml):
@@ -741,17 +809,19 @@ def main():
     c = configobj.ConfigObj(CONF, file_error=True)
 
     apply_station(c, yml.get("station") or {})
-    apply_mqtt_and_sensors(c, yml.get("mqtt") or {}, yml.get("sensors") or {})
-    apply_credentials(c)
-    apply_qc(c, yml.get("qc") or {})
-    apply_units(c, yml.get("units") or {})
-    apply_labels(c, yml.get("labels") or {})
-
+    # Observations + custom unit groups must register IN-PROCESS before
+    # apply_mqtt_and_sensors validates user-set `units:` on sensor fields against
+    # weewx.units.obs_group_dict / conversionDict.
     extra_obs_present = apply_observations(
         yml.get("observations") or [],
         (yml.get("units") or {}).get("custom_groups") or {},
     )
     apply_extra_obs_service(c, extra_obs_present)
+    apply_mqtt_and_sensors(c, yml.get("mqtt") or {}, yml.get("sensors") or {})
+    apply_credentials(c)
+    apply_qc(c, yml.get("qc") or {})
+    apply_units(c, yml.get("units") or {})
+    apply_labels(c, yml.get("labels") or {})
     apply_schema(c, yml.get("schema") or {})
 
     apply_reports(c)
