@@ -245,12 +245,32 @@ def apply_units(c, units):
 
 
 def apply_labels(c, labels):
-    """[Labels][Generic]: per-observation display label overrides."""
+    """[StdReport][[Defaults]][[[Labels]]][[[[Generic]]]]: per-obs display labels.
+
+    The skin's `$Labels` template variable is built from skin lang.conf merged
+    with the REPORT-scoped [StdReport][[Defaults]] / [StdReport][<report>]
+    overrides; a top-level [Labels] section in weewx.conf is NOT merged into
+    that scope and the skin ignores it. Putting labels under [Defaults] makes
+    them apply to every report (matches what fuzzy-archer / mast-buoy expect
+    so they land in weewxData.json's `labels.Generic`).
+
+    Idempotent: clears the managed [[[[Generic]]]] block and rebuilds it. Also
+    strips any legacy top-level [Labels] block from prior runs.
+    """
+    c.pop("Labels", None)                         # drop the old (broken) location
+    defaults = c.setdefault("StdReport", {}).setdefault("Defaults", {})
     if not labels:
+        labs = defaults.get("Labels")
+        if labs:
+            labs.pop("Generic", None)
+            if not labs:
+                defaults.pop("Labels", None)
         return
-    lab = c.setdefault("Labels", {}).setdefault("Generic", {})
+    labs = defaults.setdefault("Labels", {})
+    gen = labs.setdefault("Generic", {})
+    gen.clear()
     for obs, label in labels.items():
-        lab[obs] = str(label)
+        gen[obs] = str(label)
 
 
 def _set_extensions_hook(enabled):
