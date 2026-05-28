@@ -93,6 +93,8 @@ services:
       - ./data:/data                       # WeeWX root (config, db, reports)
       - ./configure.py:/configure.py:ro    # one-shot config patcher
       - ./station.yaml:/station.yaml:ro    # the deployment's configurable config
+      - ./branding:/branding:ro            # logo / about / nav / footer (station.yaml branding:)
+      - ./user:/user:ro                    # custom Python modules (station.yaml services:)
 
   # ----------------------------------------------------------------------
   # Web server for the generated report (fuzzy-archer output), via Caddy.

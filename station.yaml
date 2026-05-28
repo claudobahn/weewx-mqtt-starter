@@ -68,9 +68,35 @@ qc:
 # labels: { ... }         # [Labels][Generic] display-name overrides
 # datetime_formats: {...} # date/time format strings
 #
-# branding: { ... }       # Phase 3: logo/about/nav/footer + site name + url
-# logging: { ... }        # Phase 3: weewx logging handlers
-# services: { ... }       # Phase 3: extra prep/data/restful services
+# branding:               # user-provided files copied into the skin (./branding/)
+#   site_name: "Your Org"               # informational; for your own HTML to reference
+#   site_url:  "https://example.org"
+#   logo:                logo.png        # -> skins/Bootstrap/images/logo.png
+#   about_page:          about.html.tmpl # -> skins/Bootstrap/about.html.tmpl
+#   nav_fragment:        nav.html.inc    # -> skins/Bootstrap/nav.html.inc
+#   footer_fragment:     foot.html.inc   # -> skins/Bootstrap/foot.html.inc
+#   livegauges_fragment: livegauges.html.inc
+#   images:                              # extras copied to skins/Bootstrap/images/
+#     - deployment.jpg
+#
+# logging:                # [Logging] section -- handlers + formatters + root
+#   root:
+#     level: INFO
+#     handlers: [console, timed_rotate]
+#   handlers:
+#     timed_rotate:
+#       class: logging.handlers.TimedRotatingFileHandler
+#       level: DEBUG
+#       formatter: verbose
+#       filename: "logs/{process_name}.log"
+#       when: midnight
+#       backupCount: 7
+#   # formatters: { ... }   # optional, weewx defines "verbose" and "simple" already
+#
+# services:               # extra entries in weewx's *_services chains;
+#   prep:    [user.mast_obs.MASTObservations]   # files must live in ./user/<name>.py
+#   data:    []
+#   restful: []
 
 # ── Dashboard overrides (fuzzy-archer skin) ───────────────────────────────
 # Each subsection overrides the same-named section in skin.conf. Omit a key to

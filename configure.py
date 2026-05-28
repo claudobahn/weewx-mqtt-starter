@@ -25,6 +25,7 @@ called from `main()`. Phase 2/3 will plug in `apply_dashboard`, `apply_branding`
 `apply_logging`, `apply_services` -- the data flow is the same shape.
 """
 import os
+import shutil
 import sys
 
 import configobj
@@ -33,9 +34,14 @@ import weewx.units
 
 CONF = "/data/weewx.conf"
 SKIN = "/data/skins/Bootstrap/skin.conf"
+SKIN_DIR = "/data/skins/Bootstrap"
 USER_DIR = "/data/bin/user"
 EXTRA_OBS = os.path.join(USER_DIR, "extra_obs.py")
 EXTRA_SCHEMA = os.path.join(USER_DIR, "extra_schema.py")
+
+# Bind-mounted from the project root (see docker-compose.yml weewx volumes).
+BRANDING_DIR = "/branding"
+USER_DIR_SRC = "/user"
 
 STATION_YAML = os.environ.get("STATION_YAML", "/station.yaml")
 USE_SIMULATOR = os.environ.get("WEEWX_DRIVER", "mqtt").strip().lower() in ("simulator", "sim")
@@ -525,6 +531,118 @@ DASHBOARD_SUBSECTIONS = ("Navigation", "StationInfo", "Stats", "HistoryReport",
                          "News", "LiveGauges", "LiveCharts", "ImageGenerator")
 
 
+# ─── branding (user-provided files copied into the skin) ──────────────────
+
+BRANDING_TARGETS = {
+    # key in station.yaml.branding -> destination path in the skin
+    "logo":                lambda src: os.path.join(SKIN_DIR, "images", os.path.basename(src)),
+    "about_page":          lambda _:   os.path.join(SKIN_DIR, "about.html.tmpl"),
+    "nav_fragment":        lambda _:   os.path.join(SKIN_DIR, "nav.html.inc"),
+    "footer_fragment":     lambda _:   os.path.join(SKIN_DIR, "foot.html.inc"),
+    "livegauges_fragment": lambda _:   os.path.join(SKIN_DIR, "livegauges.html.inc"),
+}
+
+
+def _branding_copy(rel_path, dst_path, label):
+    # Tolerate the "branding/" prefix users naturally write (paths in YAML look
+    # relative to the project root, even though we read from /branding/).
+    if rel_path.startswith("branding/"):
+        rel_path = rel_path[len("branding/"):]
+    src = os.path.join(BRANDING_DIR, rel_path)
+    if not os.path.isfile(src):
+        sys.exit(f"branding.{label}: file not found at ./branding/{rel_path}")
+    os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+    shutil.copy2(src, dst_path)
+    print(f"Branded {label}: {src} -> {dst_path}")
+
+
+def apply_branding(branding):
+    """Copy user-provided files from ./branding/ into the fuzzy-archer skin.
+
+    Re-runs overwrite (idempotent for the files listed in YAML). Removing a key
+    does NOT restore the skin's original file (the upstream copy was overwritten
+    in /data) -- to revert, remove the file and let a fresh ./data seed re-seed
+    the skin from /opt/station. site_name / site_url are informational only;
+    the skin doesn't read them, but a user's own HTML fragments can.
+    """
+    if not branding:
+        return
+    for key, dst_fn in BRANDING_TARGETS.items():
+        src_rel = branding.get(key)
+        if src_rel:
+            _branding_copy(src_rel, dst_fn(src_rel), key)
+    for img_path in (branding.get("images") or []):
+        _branding_copy(img_path, os.path.join(SKIN_DIR, "images", os.path.basename(img_path)),
+                       f"images/{os.path.basename(img_path)}")
+
+
+# ─── logging ([Logging] section) ───────────────────────────────────────────
+
+def apply_logging(c, logging_cfg):
+    """[Logging]: handlers + formatters + root config.
+
+    Absent  -> restore the default (root: handlers=console, level=INFO; no extras).
+    Present -> replace [Logging] entirely with the YAML content (so removing a
+               handler from YAML removes it from the conf -- fully idempotent).
+    """
+    log = c.setdefault("Logging", {})
+    log.clear()
+
+    if not logging_cfg:
+        # Default: just console at INFO (what the image's baked template carries).
+        log["root"] = {"level": "INFO", "handlers": ["console"]}
+        return
+
+    for key in ("root", "handlers", "formatters"):
+        sub = logging_cfg.get(key)
+        if not sub:
+            continue
+        if key == "root":
+            log["root"] = {}
+            for k, v in sub.items():
+                log["root"][k] = _conv(v)
+        else:
+            log[key] = {}
+            for name, spec in sub.items():
+                s = log[key].setdefault(name, {})
+                for k, v in (spec or {}).items():
+                    s[k] = _conv(v)
+
+
+# ─── extra services + user-provided modules ────────────────────────────────
+
+def apply_services(c, services_cfg):
+    """Add user *_services entries + copy ./user/*.py modules into the skin.
+
+    YAML: { prep: [...], data: [...], restful: [...] }.
+    Absent -> no module copy, no entry adds (the publish/extra_obs entries
+              that other handlers maintain still apply).
+    Present -> for each entry, ensure_in_list into the matching *_services AND
+              copy every .py file in ./user/ into /data/bin/user/. One-way copy:
+              removing a file from ./user/ does NOT remove it from /data/bin/user/
+              (rm by hand or rebuild ./data to clean up).
+    """
+    if not services_cfg:
+        return
+
+    # Copy user modules so the entries below can resolve.
+    if os.path.isdir(USER_DIR_SRC):
+        os.makedirs(USER_DIR, exist_ok=True)
+        for fname in os.listdir(USER_DIR_SRC):
+            src = os.path.join(USER_DIR_SRC, fname)
+            if os.path.isfile(src) and fname.endswith(".py"):
+                dst = os.path.join(USER_DIR, fname)
+                shutil.copy2(src, dst)
+                print(f"User module: {src} -> {dst}")
+
+    svc = c.setdefault("Engine", {}).setdefault("Services", {})
+    for yaml_key, conf_key in (("prep",    "prep_services"),
+                               ("data",    "data_services"),
+                               ("restful", "restful_services")):
+        for entry in (services_cfg.get(yaml_key) or []):
+            ensure_in_list(svc, conf_key, str(entry))
+
+
 def apply_dashboard(c, dashboard):
     """Emit [StdReport][[Bootstrap]] subsections from station.yaml's `dashboard:` block.
 
@@ -638,6 +756,9 @@ def main():
 
     apply_reports(c)
     apply_dashboard(c, yml.get("dashboard") or {})
+    apply_branding(yml.get("branding") or {})
+    apply_logging(c, yml.get("logging") or {})
+    apply_services(c, yml.get("services") or {})
 
     c.write()
     print("Patched", CONF, f"(station_type = {c['Station']['station_type']})")

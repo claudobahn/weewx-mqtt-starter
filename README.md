@@ -376,6 +376,9 @@ Top-level sections:
 | `units` *(opt)* | force display units per group + define brand-new unit groups |
 | `labels` *(opt)* | per-observation display labels (`[Labels][Generic]`) |
 | `dashboard` *(opt)* | fuzzy-archer skin overrides: `navigation`, `station_info`, `stats`, `history`, `news`, `live_gauges`, `live_charts`, `image_plots`. Each subsection is *cleared and rebuilt* per run — omit to fall back to the skin's defaults. See the commented-out example in [`station.yaml`](station.yaml). |
+| `branding` *(opt)* | logo + about-page + nav/footer HTML fragments — user files in `./branding/` copied into the skin at first run. See [`branding/README.md`](branding/README.md). |
+| `logging` *(opt)* | `[Logging]` section — root handlers/level + named handler/formatter blocks (e.g. `TimedRotatingFileHandler`). Absent → default `handlers=console, level=INFO`. |
+| `services` *(opt)* | extra `prep_services` / `data_services` / `restful_services` entries. The referenced Python modules live in [`./user/`](user/README.md) and are copied into `data/bin/user/` on each run. |
 
 Re-apply after editing (the first-run bootstrap is skipped once
 `data/weewx.conf` exists):
