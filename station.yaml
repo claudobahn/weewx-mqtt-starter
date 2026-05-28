@@ -60,7 +60,7 @@ qc:
   extraTemp1:  { min: -40, max: 120, unit: degree_F }    # WH31B
   extraHumid1: { min: 0,   max: 100 }
 
-# ── Optional sections (uncomment and fill in as needed) ───────────────────
+# ── Optional sections ─────────────────────────────────────────────────────
 #
 # observations: []        # custom obs types -> generated user/extra_obs.py
 # schema: { ... }         # custom DB schema -> generated user/extra_schema.py
@@ -68,7 +68,79 @@ qc:
 # labels: { ... }         # [Labels][Generic] display-name overrides
 # datetime_formats: {...} # date/time format strings
 #
-# dashboard: { ... }      # Phase 2: live gauges/charts/navigation/stats/news
 # branding: { ... }       # Phase 3: logo/about/nav/footer + site name + url
 # logging: { ... }        # Phase 3: weewx logging handlers
 # services: { ... }       # Phase 3: extra prep/data/restful services
+
+# ── Dashboard overrides (fuzzy-archer skin) ───────────────────────────────
+# Each subsection overrides the same-named section in skin.conf. Omit a key to
+# keep the skin's default. Omit `dashboard:` entirely to keep ALL the defaults.
+# Re-runs of configure.py are idempotent (sections are cleared and rebuilt).
+#
+# Uncomment and adjust:
+#
+# dashboard:
+#   # Top nav + sidebar
+#   navigation:   [index, stats, history, news, about]
+#   station_info: [location, sunRiseSet, moonphase, uptime]
+#
+#   # Stats / history tabs
+#   stats:
+#     items: [wind, outTemp, outHumidity]
+#     aggregations:
+#       outHumidity: [avg]               # adds [[[[outHumidity]]]] [[[[[avg]]]]]
+#   history:
+#     items: [max_wind, NOAA]
+#
+#   # News entries (one [[[[<title>]]]] subsection each)
+#   news:
+#     - date: "May 5, 2025"              # used as the subsection title
+#       header: "Buoy Deployed"
+#       body:   "The Marquette team deployed the buoy in calm conditions."
+#       img:    { src: "images/deployment.jpg", alt: "Buoy crew" }
+#
+#   # Browser-side gauges. `range:` and `payload_key` are semantic; everything
+#   # under `style:` (and any extra top-level keys on a gauge) passes through to
+#   # fuzzy-archer verbatim -- see skin.conf [LiveGauges] for the full key list.
+#   live_gauges:
+#     items: [windSpeed, windDir]        # ordering; defaults to keys of `gauges`
+#     gauges:
+#       windSpeed:
+#         payload_key: windSpeed_knot    # match your unit_system / [StdConvert]
+#         range: { min: 0, max: 50, splitnumber: 10 }
+#         style:
+#           lineColor:      ["#428bca", "#b44242"]
+#           lineColorUntil: [22, maxvalue]   # strong-breeze threshold
+#           decimals: 1
+#       windDir:                         # circular direction gauge
+#         payload_key: windDir
+#         style: { lineColorN: "#428bca", lineColorS: "#b44242", decimals: 0 }
+#
+#   # Browser-side line/scatter charts. Two-level nesting: chart -> series.
+#   live_charts:
+#     items: [wind]
+#     show_daynight: true                # any chart-level keys pass through
+#     charts:
+#       wind:
+#         series:
+#           - { obs: windSpeed, payload_key: windSpeed_mph, style: { decimals: 0 } }
+#           - { obs: windGust,  payload_key: windGust_mph,  style: { showMaxMarkPoint: true } }
+#
+#   # Static day/week/month/year PNG plots from weewx's ImageGenerator.
+#   image_plots:
+#     common:                            # keys at [[[ImageGenerator]]] root
+#       daynight_day_color:   "0xffffff"
+#       daynight_night_color: "0xf0f0f0"
+#     day:
+#       style: { line_type: "none", marker_size: 3, marker_type: "cross" }
+#       items:
+#         dayWind:    { yscale: [0, null, 1.0], series: [windSpeed] }
+#         dayWindDir: { yscale: [0, 360, 45.0], series: [windDir] }
+#     week:
+#       style: { aggregate_interval: 600 }
+#       items:
+#         weekWind:
+#           yscale: [0, null, 1.0]
+#           series:
+#             - windSpeed                # bare obs name -> empty subsection
+#             - { obs: windGust, aggregate_type: max }

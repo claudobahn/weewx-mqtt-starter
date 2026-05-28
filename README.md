@@ -375,6 +375,7 @@ Top-level sections:
 | `schema` *(opt)* | extra DB columns — generates `user/extra_schema.py` extending the stock schema |
 | `units` *(opt)* | force display units per group + define brand-new unit groups |
 | `labels` *(opt)* | per-observation display labels (`[Labels][Generic]`) |
+| `dashboard` *(opt)* | fuzzy-archer skin overrides: `navigation`, `station_info`, `stats`, `history`, `news`, `live_gauges`, `live_charts`, `image_plots`. Each subsection is *cleared and rebuilt* per run — omit to fall back to the skin's defaults. See the commented-out example in [`station.yaml`](station.yaml). |
 
 Re-apply after editing (the first-run bootstrap is skipped once
 `data/weewx.conf` exists):

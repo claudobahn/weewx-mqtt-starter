@@ -344,6 +344,210 @@ def apply_reports(c):
     boot["HTML_ROOT"] = "public_html"
 
 
+# ─── dashboard (fuzzy-archer skin overrides, written under [StdReport][[Bootstrap]]) ───
+
+def _conv(v):
+    """YAML value -> configobj-friendly form (booleans become true/false strings,
+    lists pass through as configobj lists, None becomes the literal string 'None')."""
+    if v is None:
+        return "None"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, list):
+        return [_conv(x) for x in v]
+    return str(v)
+
+
+def _passthrough(section, src, skip=()):
+    """Copy a YAML dict into a configobj section, value-translated."""
+    if not src:
+        return
+    for k, v in src.items():
+        if k in skip or isinstance(v, dict):    # skip nested dicts (handled by callers)
+            continue
+        section[k] = _conv(v)
+
+
+def _replace_section(boot, name):
+    """Clear-and-rebuild helper: pop existing subsection, return a fresh one."""
+    boot.pop(name, None)
+    return boot.setdefault(name, {})
+
+
+def _items_section(boot, name, key, items):
+    """Helper: emit a `[[[<name>]]] <key> = a, b, c` subsection from a list.
+    Removes the subsection entirely if items is None (so re-runs are idempotent)."""
+    if items is None:
+        boot.pop(name, None)
+        return
+    _replace_section(boot, name)[key] = [str(x) for x in items]
+
+
+def _emit_stats(boot, stats):
+    if not stats:
+        boot.pop("Stats", None)
+        return
+    s = _replace_section(boot, "Stats")
+    if "items" in stats:
+        s["stats_items"] = [str(x) for x in stats["items"]]
+    for obs, agg_list in (stats.get("aggregations") or {}).items():
+        obs_s = s.setdefault(obs, {})
+        for agg in agg_list:
+            obs_s.setdefault(agg, {})
+
+
+def _emit_history(boot, history):
+    if not history:
+        boot.pop("HistoryReport", None)
+        return
+    s = _replace_section(boot, "HistoryReport")
+    if "items" in history:
+        s["history_items"] = [str(x) for x in history["items"]]
+
+
+def _emit_news(boot, news):
+    """[[[News]]] -- one [[[[<title>]]]] subsection per entry."""
+    if not news:
+        boot.pop("News", None)
+        return
+    s = _replace_section(boot, "News")
+    for entry in news:
+        title = entry.get("title") or entry.get("date") or entry.get("header") or "untitled"
+        e = s.setdefault(str(title), {})
+        for k in ("header", "body"):
+            if k in entry:
+                e[k] = str(entry[k])
+        # `img:` may be a dict {src, alt, title} or a bare string (src only).
+        img = entry.get("img")
+        if isinstance(img, dict):
+            for k_yaml, k_conf in (("src", "img_src"), ("alt", "img_alt"), ("title", "img_title")):
+                if k_yaml in img:
+                    e[k_conf] = str(img[k_yaml])
+        elif isinstance(img, str):
+            e["img_src"] = img
+
+
+def _emit_live_gauges(boot, gauges_cfg):
+    """[[[LiveGauges]]] live_gauge_items + per-obs subsections.
+
+    YAML: { items: [...], gauges: { <obs>: { payload_key, range: {min,max,splitnumber},
+            style: {<any fuzzy-archer key>: value} } } }.
+    """
+    if not gauges_cfg:
+        boot.pop("LiveGauges", None)
+        return
+    s = _replace_section(boot, "LiveGauges")
+    gauges = gauges_cfg.get("gauges") or {}
+    items = gauges_cfg.get("items") or list(gauges.keys())
+    s["live_gauge_items"] = [str(x) for x in items]
+    # Top-level options (heatMapEnabled, animation, ...) at the gauges level.
+    _passthrough(s, gauges_cfg, skip=("items", "gauges"))
+    for obs, spec in gauges.items():
+        g = s.setdefault(obs, {})
+        if "payload_key" in spec:
+            g["payload_key"] = str(spec["payload_key"])
+        for yaml_k, conf_k in (("min", "minvalue"), ("max", "maxvalue"), ("splitnumber", "splitnumber")):
+            v = (spec.get("range") or {}).get(yaml_k)
+            if v is not None:
+                g[conf_k] = _conv(v)
+        _passthrough(g, spec.get("style") or {})
+        _passthrough(g, spec, skip=("payload_key", "range", "style"))
+
+
+def _emit_live_charts(boot, charts_cfg):
+    """[[[LiveCharts]]] live_chart_items + per-chart -> per-series.
+
+    YAML: { items: [...], show_daynight: bool, transition_angle: int,
+            charts: { <chart>: { animation: bool, series: [ {obs, payload_key, style: {...}} ] } } }.
+    """
+    if not charts_cfg:
+        boot.pop("LiveCharts", None)
+        return
+    s = _replace_section(boot, "LiveCharts")
+    charts = charts_cfg.get("charts") or {}
+    items = charts_cfg.get("items") or list(charts.keys())
+    s["live_chart_items"] = [str(x) for x in items]
+    _passthrough(s, charts_cfg, skip=("items", "charts"))
+    for chart_name, chart_spec in charts.items():
+        c = s.setdefault(chart_name, {})
+        _passthrough(c, chart_spec, skip=("series",))
+        for entry in (chart_spec.get("series") or []):
+            name = entry.get("obs") or entry.get("name")
+            if not name:
+                continue
+            sec = c.setdefault(name, {})
+            if "payload_key" in entry:
+                sec["payload_key"] = str(entry["payload_key"])
+            _passthrough(sec, entry.get("style") or {})
+            _passthrough(sec, entry, skip=("obs", "name", "payload_key", "style"))
+
+
+def _emit_image_plots(boot, plots_cfg):
+    """[[[ImageGenerator]]] -> [[[[<timespan>_images]]]] -> per-plot subsections.
+
+    YAML: { common: {daynight_*_color, ...},
+            day|week|month|year: { style: {line_type, marker_*, aggregate_interval},
+                                   items: { <plot>: { yscale, series: [obs | {obs, ...}] } } } }.
+    """
+    if not plots_cfg:
+        boot.pop("ImageGenerator", None)
+        return
+    s = _replace_section(boot, "ImageGenerator")
+    _passthrough(s, plots_cfg.get("common") or {})
+    for timespan in ("day", "week", "month", "year"):
+        t_cfg = plots_cfg.get(timespan)
+        if not t_cfg:
+            continue
+        ts = s.setdefault(f"{timespan}_images", {})
+        items = t_cfg.get("items") or {}
+        if items:
+            ts["image_items"] = [str(k) for k in items.keys()]
+        _passthrough(ts, t_cfg.get("style") or {})
+        _passthrough(ts, t_cfg, skip=("items", "style"))
+        for plot_name, plot_spec in items.items():
+            p = ts.setdefault(plot_name, {})
+            if "yscale" in plot_spec:
+                p["yscale"] = _conv(plot_spec["yscale"])
+            _passthrough(p, plot_spec.get("style") or {})
+            _passthrough(p, plot_spec, skip=("yscale", "series", "style"))
+            for series in (plot_spec.get("series") or []):
+                if isinstance(series, str):
+                    p.setdefault(series, {})
+                else:
+                    name = series.get("obs") or series.get("name")
+                    if not name:
+                        continue
+                    sec = p.setdefault(name, {})
+                    _passthrough(sec, series, skip=("obs", "name"))
+
+
+DASHBOARD_SUBSECTIONS = ("Navigation", "StationInfo", "Stats", "HistoryReport",
+                         "News", "LiveGauges", "LiveCharts", "ImageGenerator")
+
+
+def apply_dashboard(c, dashboard):
+    """Emit [StdReport][[Bootstrap]] subsections from station.yaml's `dashboard:` block.
+
+    Idempotent: each helper removes its subsection when its YAML key is absent,
+    so reruns always reflect the current YAML (no stale overrides). When the
+    entire `dashboard:` is absent, all dashboard-managed subsections are removed
+    and fuzzy-archer's skin.conf defaults apply.
+    """
+    boot = c.setdefault("StdReport", {}).setdefault("Bootstrap", {})
+    if not dashboard:
+        for name in DASHBOARD_SUBSECTIONS:
+            boot.pop(name, None)
+        return
+    _items_section(boot, "Navigation",  "navigation_items",   dashboard.get("navigation"))
+    _items_section(boot, "StationInfo", "station_info_items", dashboard.get("station_info"))
+    _emit_stats(boot,        dashboard.get("stats"))
+    _emit_history(boot,      dashboard.get("history"))
+    _emit_news(boot,         dashboard.get("news"))
+    _emit_live_gauges(boot,  dashboard.get("live_gauges"))
+    _emit_live_charts(boot,  dashboard.get("live_charts"))
+    _emit_image_plots(boot,  dashboard.get("image_plots"))
+
+
 def apply_skin(yml):
     """skin.conf: live-gauge WebSocket URL + dashboard creds for the browser."""
     ws_url = WS_URL_ENV or str((yml.get("mqtt") or {}).get("websocket_url") or "ws://localhost:9001")
@@ -433,6 +637,7 @@ def main():
     apply_schema(c, yml.get("schema") or {})
 
     apply_reports(c)
+    apply_dashboard(c, yml.get("dashboard") or {})
 
     c.write()
     print("Patched", CONF, f"(station_type = {c['Station']['station_type']})")
