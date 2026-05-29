@@ -243,6 +243,11 @@ def apply_units(c, units):
 
     `custom_groups` (defining brand-new unit groups) is still written into
     `extra_obs.py` instead of weewx.conf -- see apply_observations().
+
+    Always leaves [[[Units]]] present (even if [[[[Groups]]]] is empty):
+    fuzzy-archer's jsonengine.setup() does `config['StdReport']['Defaults']['Units']`
+    unconditionally and raises KeyError if the section is missing -- same
+    defensive shape as apply_labels.
     """
     # Strip the old (broken) phantom location.
     sc = c.get("StdConvert")
@@ -250,28 +255,10 @@ def apply_units(c, units):
         sc.pop("Group", None)
 
     defaults = c.setdefault("StdReport", {}).setdefault("Defaults", {})
-    if not units:
-        u = defaults.get("Units")
-        if u:
-            u.pop("Groups", None)
-            if not u:
-                defaults.pop("Units", None)
-        return
-
-    groups = units.get("groups") or {}
-    if not groups:
-        # No per-group overrides -> clean up any managed Groups block from prior runs.
-        u = defaults.get("Units")
-        if u:
-            u.pop("Groups", None)
-            if not u:
-                defaults.pop("Units", None)
-        return
-
     u = defaults.setdefault("Units", {})
     g = u.setdefault("Groups", {})
     g.clear()
-    for grp, unit in groups.items():
+    for grp, unit in ((units or {}).get("groups") or {}).items():
         g[grp] = str(unit)
 
 
@@ -287,20 +274,18 @@ def apply_labels(c, labels):
 
     Idempotent: clears the managed [[[[Generic]]]] block and rebuilds it. Also
     strips any legacy top-level [Labels] block from prior runs.
+
+    Always leaves [[[Labels]]] present (even if empty): fuzzy-archer's
+    jsonengine.setup() does `config['StdReport']['Defaults']['Labels']`
+    unconditionally and raises KeyError if the section is missing. An empty
+    Section merges to nothing, so it's harmless.
     """
     c.pop("Labels", None)                         # drop the old (broken) location
     defaults = c.setdefault("StdReport", {}).setdefault("Defaults", {})
-    if not labels:
-        labs = defaults.get("Labels")
-        if labs:
-            labs.pop("Generic", None)
-            if not labs:
-                defaults.pop("Labels", None)
-        return
     labs = defaults.setdefault("Labels", {})
     gen = labs.setdefault("Generic", {})
     gen.clear()
-    for obs, label in labels.items():
+    for obs, label in (labels or {}).items():
         gen[obs] = str(label)
 
 
