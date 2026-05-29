@@ -835,6 +835,22 @@ def patch_jsonengine():
             "                self.setup()\n"
             "                self.gen_data()",
         ),
+        (
+            "gauge missing observationType",
+            "            gauge_config['target_unit'] = self.get_target_unit(gauge)\n"
+            "            gauge_config['obs_group'] = self.get_obs_group(gauge)",
+            "            gauge_config['target_unit'] = self.get_target_unit(gauge)\n"
+            "            gauge_config['obs_group'] = self.get_obs_group(gauge)\n"
+            "            gauge_config['observationType'] = gauge",
+        ),
+        (
+            "chart series missing observationType",
+            "                category_config['target_unit'] = self.get_target_unit(category)\n"
+            "                category_config['obs_group'] = self.get_obs_group(category)",
+            "                category_config['target_unit'] = self.get_target_unit(category)\n"
+            "                category_config['obs_group'] = self.get_obs_group(category)\n"
+            "                category_config['observationType'] = category",
+        ),
     ]
     with open(path) as f:
         src = f.read()
