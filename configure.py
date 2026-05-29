@@ -238,16 +238,14 @@ def apply_units(c, units):
     reads from for display unit overrides (and where mast-buoy puts its
     `group_speed = knot`). Same structural issue as apply_labels.
 
-    Idempotent: clears + rebuilds the managed [[[[Groups]]]] block. Also
-    strips any legacy top-level [StdConvert][[Group]] from prior runs.
+    Idempotent: clears + rebuilds the managed [[[[Groups]]]] block, then
+    drops the parent [[[Units]]] section if it ends up empty. (The
+    fuzzy-archer image we're building against carries a defensive
+    `.get('Units', {})` in jsonengine.setup() so the section being absent
+    no longer crashes JSONGenerator -- see FUZZY_REF in weewx/Dockerfile.)
 
     `custom_groups` (defining brand-new unit groups) is still written into
     `extra_obs.py` instead of weewx.conf -- see apply_observations().
-
-    Always leaves [[[Units]]] present (even if [[[[Groups]]]] is empty):
-    fuzzy-archer's jsonengine.setup() does `config['StdReport']['Defaults']['Units']`
-    unconditionally and raises KeyError if the section is missing -- same
-    defensive shape as apply_labels.
     """
     # Strip the old (broken) phantom location.
     sc = c.get("StdConvert")
@@ -255,10 +253,19 @@ def apply_units(c, units):
         sc.pop("Group", None)
 
     defaults = c.setdefault("StdReport", {}).setdefault("Defaults", {})
+    groups = ((units or {}).get("groups") or {})
+    if not groups:
+        # Drop the [[[Groups]]] block; if [[[Units]]] becomes empty, drop it too.
+        u = defaults.get("Units")
+        if u:
+            u.pop("Groups", None)
+            if not u:
+                defaults.pop("Units", None)
+        return
     u = defaults.setdefault("Units", {})
     g = u.setdefault("Groups", {})
     g.clear()
-    for grp, unit in ((units or {}).get("groups") or {}).items():
+    for grp, unit in groups.items():
         g[grp] = str(unit)
 
 
@@ -272,20 +279,24 @@ def apply_labels(c, labels):
     them apply to every report (matches what fuzzy-archer / mast-buoy expect
     so they land in weewxData.json's `labels.Generic`).
 
-    Idempotent: clears the managed [[[[Generic]]]] block and rebuilds it. Also
-    strips any legacy top-level [Labels] block from prior runs.
-
-    Always leaves [[[Labels]]] present (even if empty): fuzzy-archer's
-    jsonengine.setup() does `config['StdReport']['Defaults']['Labels']`
-    unconditionally and raises KeyError if the section is missing. An empty
-    Section merges to nothing, so it's harmless.
+    Idempotent: clears + rebuilds the managed [[[[Generic]]]] block, then
+    drops the parent [[[Labels]]] section if it ends up empty. (Symmetric
+    with apply_units; the fuzzy-archer build uses `.get('Labels', {})` so
+    the section being absent doesn't crash JSONGenerator.)
     """
     c.pop("Labels", None)                         # drop the old (broken) location
     defaults = c.setdefault("StdReport", {}).setdefault("Defaults", {})
+    if not labels:
+        labs = defaults.get("Labels")
+        if labs:
+            labs.pop("Generic", None)
+            if not labs:
+                defaults.pop("Labels", None)
+        return
     labs = defaults.setdefault("Labels", {})
     gen = labs.setdefault("Generic", {})
     gen.clear()
-    for obs, label in (labels or {}).items():
+    for obs, label in labels.items():
         gen[obs] = str(label)
 
 
@@ -791,68 +802,6 @@ def apply_skin(yml):
     print("Patched", SKIN, "-> broker", ws_url)
 
 
-def patch_jsonengine():
-    """Two in-place patches to the installed fuzzy-archer jsonengine.py:
-
-      1. convert() called with a bare string instead of a ValueTuple raises
-         "string index out of range" whenever Station altitude is in 'foot'.
-      2. On an empty archive database (fresh start, before the first archive
-         record) lastGoodStamp is None and `lastGoodStamp - 1` raises
-         TypeError. The Cheetah generator skips this case gracefully
-         ("cannot find start time"); make JSONGenerator do the same.
-
-    Warns loudly if a target moves upstream (so a maintainer notices).
-    """
-    path = "/data/bin/user/jsonengine.py"
-    patches = [
-        (
-            "altitude convert bug",
-            "altitude_m = convert(altitude[0], 'meter')[0]",
-            "altitude_m = convert((float(altitude[0]), 'foot', 'group_altitude'), 'meter')[0]",
-        ),
-        (
-            "empty-database guard",
-            "            if enabled:\n                self.setup()\n                self.gen_data()",
-            "            if enabled:\n"
-            "                if self.db_binder.get_manager().lastGoodStamp() is None:\n"
-            "                    log.info('JSONGenerator: empty archive database, skipping until data arrives')\n"
-            "                    return\n"
-            "                self.setup()\n"
-            "                self.gen_data()",
-        ),
-        (
-            "gauge missing observationType",
-            "            gauge_config['target_unit'] = self.get_target_unit(gauge)\n"
-            "            gauge_config['obs_group'] = self.get_obs_group(gauge)",
-            "            gauge_config['target_unit'] = self.get_target_unit(gauge)\n"
-            "            gauge_config['obs_group'] = self.get_obs_group(gauge)\n"
-            "            gauge_config['observationType'] = gauge",
-        ),
-        (
-            "chart series missing observationType",
-            "                category_config['target_unit'] = self.get_target_unit(category)\n"
-            "                category_config['obs_group'] = self.get_obs_group(category)",
-            "                category_config['target_unit'] = self.get_target_unit(category)\n"
-            "                category_config['obs_group'] = self.get_obs_group(category)\n"
-            "                category_config['observationType'] = category",
-        ),
-    ]
-    with open(path) as f:
-        src = f.read()
-    for label, old, new in patches:
-        if new in src:
-            continue
-        if old in src:
-            src = src.replace(old, new)
-            print("Patched", path, f"({label})")
-        else:
-            print(f"WARNING: {path} ({label}): patch target not found; "
-                  "fuzzy-archer may have changed upstream -- review configure.py.",
-                  file=sys.stderr)
-    with open(path, "w") as f:
-        f.write(src)
-
-
 # ─── main ──────────────────────────────────────────────────────────────────
 
 def main():
@@ -886,7 +835,6 @@ def main():
     print("Patched", CONF, f"(station_type = {c['Station']['station_type']})")
 
     apply_skin(yml)
-    patch_jsonengine()
 
 
 if __name__ == "__main__":
