@@ -4,13 +4,26 @@
 FROM python:3.13.13-slim
 
 ARG WEEWX_VERSION=5.3.1
-# Pinned extensions, baked into a station template below. publish + fuzzy-archer
-# use release tags; subscribe is pinned to a master commit because the features
-# this stack relies on (msg_id_field, per-field units, wildcard topic matching,
-# the user.mqttsubscribe driver module) are newer than its latest release (v3.1.1).
+# Pinned extensions, baked into a station template below. publish uses a
+# release tag; subscribe is pinned to a master commit because the features
+# this stack relies on (msg_id_field, per-field units, wildcard topic
+# matching, the user.mqttsubscribe driver module) are newer than its latest
+# release (v3.1.1).
+#
+# fuzzy-archer is TEMPORARILY pulled from a fork branch
+# (claudobahn/fuzzy-archer:jsonengine-fixes) carrying five jsonengine.py
+# patches submitted upstream:
+#   - empty-archive guard (don't crash JSONGenerator on a fresh DB)
+#   - altitude.convert ValueTuple fix (foot stations were crashing)
+#   - observationType emitted on each gauge config (browser unit conversion)
+#   - observationType emitted on each chart series config (same)
+#   - tolerate absent [[Defaults]][[[Units]]] / [[[Labels]]] override sections
+# Once any of those merge to brewster76/fuzzy-archer:master and a release
+# tag is cut, flip the URL back to brewster76 and pin FUZZY_REF to that tag.
 ARG PUBLISH_REF=refs/tags/v1.1.0-rc04a
 ARG SUBSCRIBE_REF=72a9d1dcc1cad5c063cd04b4ef9df6d0608be7e7
-ARG FUZZY_REF=refs/tags/v4.4
+ARG FUZZY_REPO=claudobahn/fuzzy-archer
+ARG FUZZY_REF=refs/heads/jsonengine-fixes
 ENV PIP_ROOT_USER_ACTION=ignore
 
 # WeeWX + almanac (ephem) + the MQTT client the extensions use + pyyaml (read by
@@ -32,7 +45,7 @@ RUN weectl station create --no-prompt /data \
  && printf '\n[Logging]\n    [[root]]\n        level = INFO\n        handlers = console,\n' >> /data/weewx.conf \
  && weectl extension install "https://github.com/weewx-mqtt/publish/archive/${PUBLISH_REF}.zip" --yes --config /data/weewx.conf \
  && weectl extension install "https://github.com/weewx-mqtt/subscribe/archive/${SUBSCRIBE_REF}.zip" --yes --config /data/weewx.conf \
- && weectl extension install "https://github.com/brewster76/fuzzy-archer/archive/${FUZZY_REF}.zip" --yes --config /data/weewx.conf \
+ && weectl extension install "https://github.com/${FUZZY_REPO}/archive/${FUZZY_REF}.zip" --yes --config /data/weewx.conf \
  && mv /data /opt/station \
  && mkdir -p /data \
  && chown -R weewx:weewx /opt/station /data
