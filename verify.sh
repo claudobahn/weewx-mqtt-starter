@@ -33,7 +33,12 @@ done
 
 echo "== weewx engine =="
 logs="$($DC logs weewx 2>&1)"
-echo "$logs" | grep -q "Loading station type" \
+# NB: bash pattern match (not `echo "$logs" | grep -q`). With `set -o pipefail`,
+# grep -q exits 0 on the first match and closes the pipe; the still-writing
+# `echo` then dies with SIGPIPE (141), and pipefail propagates that as the
+# pipeline status -- so once `docker compose logs weewx` outgrows the pipe
+# buffer (~64 KB, after a handful of restarts), this check spuriously failed.
+[[ "$logs" == *"Loading station type"* ]] \
   && ok "engine loaded station driver" || no "engine did not load a station driver"
 errs="$(echo "$logs" | grep -c 'ERROR' || true)"
 if [ "$errs" -eq 0 ]; then ok "no ERROR lines in weewx log"; else
