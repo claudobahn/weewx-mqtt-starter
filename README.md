@@ -380,13 +380,10 @@ Top-level sections:
 | `logging` *(opt)* | `[Logging]` section — root handlers/level + named handler/formatter blocks (e.g. `TimedRotatingFileHandler`). Absent → default `handlers=console, level=INFO`. |
 | `services` *(opt)* | extra `prep_services` / `data_services` / `restful_services` entries. The referenced Python modules live in [`./user/`](user/README.md) and are copied into `data/bin/user/` on each run. |
 
-Re-apply after editing (the first-run bootstrap is skipped once
-`data/weewx.conf` exists):
-
-```bash
-docker compose run --rm --entrypoint python weewx /configure.py && \
-  docker compose restart weewx
-```
+Re-apply after editing: see [Updating an existing
+deployment](#updating-an-existing-deployment) below for the apply command and
+the matrix of which changes are safe on a running stack vs. which need a
+`./data` wipe.
 
 The `sensors:` block follows the per-rtl_433-sensor shape:
 
@@ -429,6 +426,92 @@ Key points, each verified end-to-end:
   own loop packet, so `weather/loop` shows one sensor at a time; WeeWX merges
   them into a single archive record.
 
+## Updating an existing deployment
+
+`configure.py` runs at first-run bootstrap. After that, the stack picks up
+edits to `station.yaml` in one of two ways:
+
+```bash
+# Either: explicit -- recompiles immediately and restarts weewx
+./scripts/apply.sh
+
+# Or: implicit -- the entrypoint hashes station.yaml on start and re-applies
+# automatically if it changed since the last apply
+docker compose restart weewx
+```
+
+Both flows go through the same `configure.py`, so the result is identical;
+`scripts/apply.sh --regen` additionally forces a one-off
+`weectl report run Bootstrap` if you don't want to wait for the next archive
+interval to refresh the HTML.
+
+### What's safe to change on a running stack
+
+These edits are picked up cleanly — `configure.py` rewrites the affected
+sections of `weewx.conf` / `skin.conf` and weewxd resumes.
+
+| Change | Notes |
+|---|---|
+| `station.location` / `latitude` / `longitude` / `altitude` | Cosmetic / almanac. No DB impact. |
+| `station.timezone` | Picked up by the entrypoint on the next start; affects how timestamps **render**, not what's stored (WeeWX stores epoch seconds). |
+| `mqtt.broker` / `port` / `websocket_url` | Driver reconnects to the broker; dashboard JS reloads its WS endpoint. |
+| `sensors.sources[]` (add / edit / remove) | The new `[MQTTSubscribeDriver][[topics]]` is written in full each run, so removed sources go away too. |
+| `qc.*` bounds | Take effect on the next loop packet. |
+| `units.*` display unit overrides, `labels.*`, `datetime_formats.*` | Skin-only; visible after the next report run. |
+| `dashboard.*` (`navigation`, `station_info`, `stats`, `history`, `news`, `live_gauges`, `live_charts`, `image_plots`) | Each subsection is *cleared and rebuilt* per run — drop a key to fall back to the skin default. |
+| `branding.*` files (logo, about page, nav/footer fragments, images) | Copied into the skin; live after the next report. |
+| `logging` | Re-emits the whole `[Logging]` section; takes effect on weewxd restart. |
+| `services` | `prep_services` / `data_services` / `restful_services` chains are rewritten; modules in `./user/` get re-copied. |
+| `observations` *(add)*, `units.custom_groups` *(add)* | A new `user/extra_obs.py` is generated and the loader hook in `extensions.py` activates it. |
+
+### Benign with one caveat
+
+| Change | Caveat |
+|---|---|
+| Removing an `observations` entry / `units.custom_groups` key | Stops registering the obs/group, but **historical rows in `weewx.sdb` keep their values** under the old name. New writes won't reach a DB column that no longer matches a schema entry. |
+| Flipping `contains_total: true` ↔ `false` on a rain-style field | The next message is interpreted with the new semantics — a flip on a counter can produce one rogue delta (a huge spike or a `0`) at the boundary. |
+| Renaming a gauge / chart key under `dashboard.live_gauges` / `live_charts` | The browser-side definition moves cleanly, but cached page tabs / bookmarks pointing at the old anchor go stale. |
+| `sensors.unit_system` on a populated DB | The DB column unit system is set at schema-creation time; changing this here only changes what unit the **driver** publishes loop packets in. The archive stays in its original unit system, and WeeWX converts on the fly. Surprising, not destructive. |
+
+### Destructive — require `./data` wipe
+
+The following can't be re-applied on a populated database; either keep them at
+their original values or follow the wipe-and-restore sequence below.
+
+| Change | Why |
+|---|---|
+| `station.archive_interval` | The schema is bound to the original interval; changing it on a populated DB produces inconsistent aggregates. |
+| `schema:` (renaming / removing columns, changing types) | `extra_schema.py` is read once when the DB is created; subsequent changes don't migrate existing rows. |
+| `WEEWX_DRIVER` swap (env, e.g. between `mqtt` and `simulator`) | The Simulator and MQTTSubscribe driver populate different observation sets; mixing them in one DB gives gaps and confused stats. |
+| Changing the *interpretation* of an existing observation (e.g. remapping `extraTemp1` from a WH31B to a different sensor with different bounds) | Historical rows under that name now reflect a different physical sensor; aggregates are misleading. |
+
+**Wipe-and-restore sequence** (lose all history; preserve credentials):
+
+```bash
+docker compose down
+# 1. Back up anything you want to keep
+cp data/archive/weewx.sdb backups/weewx.sdb.$(date +%Y%m%d)
+# 2. Wipe the WeeWX root. Leave .env alone -- the broker passwd
+#    derived from it is in mosquitto/passwd, and the same secrets are baked
+#    into the new weewx.conf at bootstrap. (Wiping .env without wiping
+#    mosquitto/passwd would orphan the broker accounts.)
+rm -rf data/
+# 3. First-run bootstrap regenerates everything from station.yaml.
+./setup.sh
+```
+
+If you instead want a fresh `.env` (rotating MQTT passwords) you have to
+delete `mosquitto/passwd` too — see [Accounts &
+security](#accounts--security).
+
+### Behind the scenes
+
+`configure.py` stamps `data/.station-yaml.hash` (sha256 of `station.yaml`) on
+every successful run. The entrypoint compares the live YAML's hash against the
+stamp on container start and re-runs `configure.py` if they differ — so
+`docker compose restart weewx` after editing `station.yaml` is enough to apply
+benign changes, without remembering the `--entrypoint python` invocation.
+
 ## Layout
 
 ```
@@ -448,6 +531,7 @@ station.yaml                  # the single source of configurable truth (edit th
 setup.sh                      # bootstrap (gen creds, build image, start)
 verify.sh                     # health check (pass/fail) of the running stack
 e2e-test.sh                   # e2e pipeline test: inject rtl_433 JSON, assert weather/loop
+scripts/apply.sh              # re-apply station.yaml to a running stack (benign edits)
 .env.example                  # production (DOMAIN/ACME_EMAIL) settings template
 data/                         # WeeWX root: weewx.conf, weewx.sdb, public_html/ (generated)
 ```

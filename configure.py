@@ -24,6 +24,7 @@ The file is organised as one `apply_<section>(...)` per top-level YAML key,
 called from `main()`. Phase 2/3 will plug in `apply_dashboard`, `apply_branding`,
 `apply_logging`, `apply_services` -- the data flow is the same shape.
 """
+import hashlib
 import os
 import shutil
 import sys
@@ -38,6 +39,9 @@ SKIN_DIR = "/data/skins/Bootstrap"
 USER_DIR = "/data/bin/user"
 EXTRA_OBS = os.path.join(USER_DIR, "extra_obs.py")
 EXTRA_SCHEMA = os.path.join(USER_DIR, "extra_schema.py")
+# Written at the end of main(); compared by entrypoint.sh on container start
+# so a station.yaml edit + `docker compose restart weewx` auto-re-applies.
+APPLIED_HASH = "/data/.station-yaml.hash"
 EXTENSIONS_PY = os.path.join(USER_DIR, "extensions.py")
 EXT_HOOK_BEGIN = "# --- BEGIN station.yaml extra_obs hook (managed by configure.py) ---"
 EXT_HOOK_END = "# --- END station.yaml extra_obs hook ---"
@@ -835,6 +839,18 @@ def main():
     print("Patched", CONF, f"(station_type = {c['Station']['station_type']})")
 
     apply_skin(yml)
+
+    # Stamp the hash of the YAML we just applied so entrypoint.sh can detect
+    # later edits and auto-re-apply on `docker compose restart weewx`. Both
+    # the first-run bootstrap and `scripts/apply.sh` flow through here, so the
+    # stamp stays in sync with the running weewx.conf.
+    try:
+        with open(STATION_YAML, "rb") as fh:
+            digest = hashlib.sha256(fh.read()).hexdigest()
+        with open(APPLIED_HASH, "w") as fh:
+            fh.write(digest + "\n")
+    except OSError as exc:
+        print(f"warning: could not write {APPLIED_HASH}: {exc}", file=sys.stderr)
 
 
 if __name__ == "__main__":

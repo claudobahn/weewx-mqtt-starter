@@ -2,10 +2,13 @@
 # Secrets (MQTT account passwords, ACME email) stay in .env; configuration and
 # customization live here.
 #
-# Read by configure.py at first-run bootstrap. To re-apply after editing on an
-# existing stack:
-#     docker compose run --rm --entrypoint python weewx /configure.py
-#     docker compose restart weewx
+# Read by configure.py at first-run bootstrap. To re-apply after editing:
+#     ./scripts/apply.sh           # (or just: docker compose restart weewx --
+#                                  #  the entrypoint hashes this file and
+#                                  #  re-runs configure.py when it changes)
+# See README's "Updating an existing deployment" for the benign/destructive
+# matrix -- a handful of fields (archive_interval, schema:, driver swap)
+# require a ./data wipe.
 
 # ── Identity ───────────────────────────────────────────────────────────────
 station:

@@ -48,6 +48,23 @@ if [ ! -f "${CONF}" ]; then
     exit 1
   fi
   echo "Bootstrap complete."
+else
+  # Auto-apply station.yaml on restart when it has changed since the last
+  # apply. configure.py writes /data/.station-yaml.hash on success (both at
+  # first-run bootstrap and via scripts/apply.sh), so comparing hashes here
+  # detects edits cheaply. If configure.py fails, keep the previous conf and
+  # let weewxd run -- the user can fix the YAML and restart again.
+  if [ -f /station.yaml ]; then
+    current_hash="$(sha256sum /station.yaml | awk '{print $1}')"
+    applied_hash="$(cat "${WEEWX_ROOT}/.station-yaml.hash" 2>/dev/null || true)"
+    if [ "${current_hash}" != "${applied_hash}" ]; then
+      echo "station.yaml changed since last apply; re-running configure.py."
+      if ! python /configure.py; then
+        echo "WARNING: configure.py failed; keeping previous weewx.conf." >&2
+        echo "         Fix station.yaml and restart, or run scripts/apply.sh." >&2
+      fi
+    fi
+  fi
 fi
 
 if [ "$#" -gt 0 ]; then
