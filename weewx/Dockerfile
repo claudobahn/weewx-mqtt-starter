@@ -27,11 +27,15 @@ ARG FUZZY_REF=refs/heads/jsonengine-fixes
 ENV PIP_ROOT_USER_ACTION=ignore
 
 # WeeWX + almanac (ephem) + the MQTT client the extensions use + pyyaml (read by
-# configure.py), all baked in so the running stack never installs anything.
+# configure.py) + tzlocal (used by fuzzy-archer's jsonengine.py to resolve the
+# station's IANA timezone for browser-side Luxon; without it jsonengine logs
+# a WARNING and emits a frozen UTC offset like "-05:00" that doesn't track DST,
+# stale until the next archive interval regenerates the report), all baked in
+# so the running stack never installs anything.
 # No libusb: sensor data arrives over MQTT (OpenMQTTGateway does the RF decode),
 # so no USB device is needed -- even with real hardware. Add libusb-1.0-0 only
 # if you attach a USB-connected station driver instead.
-RUN pip install --no-cache-dir "weewx==${WEEWX_VERSION}" ephem paho-mqtt pyyaml
+RUN pip install --no-cache-dir "weewx==${WEEWX_VERSION}" ephem paho-mqtt pyyaml tzlocal
 
 RUN useradd --system --uid 1000 --create-home --home-dir /home/weewx weewx
 
