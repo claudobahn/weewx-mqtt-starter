@@ -115,6 +115,13 @@ qc:
 # Uncomment and adjust:
 #
 # dashboard:
+#   # History window (hours) for the live charts + the wind rose overlay's
+#   # "recent" cutoff + the browser-side data rotation (older points shift off
+#   # the front as new MQTT samples arrive). One value drives all three; the
+#   # skin's default is 27 -- drop to 3-6 for a "current conditions" dashboard,
+#   # raise to 48-72 for trend analysis. Whole hours only.
+#   timespan: 27
+#
 #   # Top nav + sidebar
 #   navigation:   [index, stats, history, news, about]
 #   station_info: [location, sunRiseSet, moonphase, uptime]

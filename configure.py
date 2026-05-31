@@ -786,11 +786,19 @@ def apply_dashboard(c, dashboard):
 
 
 def apply_skin(yml):
-    """skin.conf: live-gauge WebSocket URL + dashboard creds for the browser."""
+    """skin.conf: live-gauge WebSocket URL + dashboard creds + history timespan."""
     ws_url = WS_URL_ENV or str((yml.get("mqtt") or {}).get("websocket_url") or "ws://localhost:9001")
     s = configobj.ConfigObj(SKIN, file_error=True)
     jg = s.setdefault("JSONGenerator", {})
     jg["enabled"] = "true"
+    # `timespan` (hours) is the single window driving both the live charts'
+    # history series and the live gauges' wind-rose / browser-side data
+    # rotation -- see fuzzy-archer jsonengine.py + site.js maxAgeHoursMS.
+    # Omit `dashboard.timespan` from station.yaml to keep the skin default
+    # (27 h at the time of writing).
+    timespan = (yml.get("dashboard") or {}).get("timespan")
+    if timespan is not None:
+        jg["timespan"] = str(int(timespan))
     conns = jg.setdefault("MQTT", {}).setdefault("connections", {})
     conns.clear()
     conns["local_broker"] = {

@@ -474,6 +474,7 @@ sections of `weewx.conf` / `skin.conf` and weewxd resumes.
 | `qc.*` bounds | Take effect on the next loop packet. |
 | `units.*` display unit overrides, `labels.*`, `datetime_formats.*` | Skin-only; visible after the next report run. |
 | `dashboard.*` (`navigation`, `station_info`, `stats`, `history`, `news`, `live_gauges`, `live_charts`, `image_plots`) | Each subsection is *cleared and rebuilt* per run — drop a key to fall back to the skin default. |
+| `dashboard.timespan` (hours) | History window for live charts + wind-rose recent cutoff + browser-side data rotation. Single value drives all three; skin default is 27. Whole hours only. |
 | `branding.*` files (logo, about page, nav/footer fragments, images) | Copied into the skin; live after the next report. |
 | `logging` | Re-emits the whole `[Logging]` section; takes effect on weewxd restart. |
 | `services` | `prep_services` / `data_services` / `restful_services` chains are rewritten; modules in `./user/` get re-copied. |
