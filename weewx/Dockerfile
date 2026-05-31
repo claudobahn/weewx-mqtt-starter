@@ -48,6 +48,7 @@ RUN weectl station create --no-prompt /data \
  && weectl extension install "https://github.com/${FUZZY_REPO}/archive/${FUZZY_REF}.zip" --yes --config /data/weewx.conf \
  && mv /data /opt/station \
  && mkdir -p /data \
+ && python3 -c "import uuid; open('/opt/station/.image-id', 'w').write(str(uuid.uuid4()))" \
  && chown -R weewx:weewx /opt/station /data
 VOLUME ["/data"]
 

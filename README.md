@@ -445,6 +445,21 @@ Both flows go through the same `configure.py`, so the result is identical;
 `weectl report run Bootstrap` if you don't want to wait for the next archive
 interval to refresh the HTML.
 
+**Image rebuilds** (bumping `PUBLISH_REF` / `SUBSCRIBE_REF` / `FUZZY_REF` in
+`weewx/Dockerfile`, or editing `./fuzzy-archer/` on a branch that bakes it
+locally) carry skin / extension files that aren't part of `weewx.conf` — JS,
+CSS, templates, `bin/user/*.py`. The entrypoint detects an image change via a
+build-time stamp and refreshes those in place on the next start:
+
+```bash
+docker compose build weewx
+docker compose up -d weewx        # entrypoint re-syncs /data/skins + /data/bin/user
+                                  # from /opt/station, then re-runs configure.py
+```
+
+Static assets land in `data/public_html/` on the following report run
+(either the next archive interval or an explicit `./scripts/apply.sh --regen`).
+
 ### What's safe to change on a running stack
 
 These edits are picked up cleanly — `configure.py` rewrites the affected
@@ -506,11 +521,27 @@ security](#accounts--security).
 
 ### Behind the scenes
 
-`configure.py` stamps `data/.station-yaml.hash` (sha256 of `station.yaml`) on
-every successful run. The entrypoint compares the live YAML's hash against the
-stamp on container start and re-runs `configure.py` if they differ — so
-`docker compose restart weewx` after editing `station.yaml` is enough to apply
-benign changes, without remembering the `--entrypoint python` invocation.
+Two parallel reconciliation mechanisms live in the entrypoint:
+
+- **`station.yaml` ↔ `/data`** — `configure.py` stamps
+  `data/.station-yaml.hash` (sha256 of `station.yaml`) on every successful
+  run. The entrypoint compares the live YAML's hash against the stamp on
+  container start and re-runs `configure.py` if they differ — so
+  `docker compose restart weewx` after editing `station.yaml` is enough to
+  apply benign changes.
+- **Image template ↔ `/data`** — the Dockerfile stamps a UUID into
+  `/opt/station/.image-id` at build time, copied alongside everything else
+  on first run. After an image rebuild, the entrypoint sees the stamp differ
+  from `data/.image-id`, re-overlays `/opt/station/skins/` and
+  `/opt/station/bin/user/` onto `/data`, refreshes the stamp, and
+  invalidates the station.yaml hash so the YAML overrides are re-applied on
+  top of the new defaults. `weewx.conf` is left alone (`configure.py`-owned)
+  and `weewx.sdb` is left alone (archive history). `cp -a` leaves files-
+  only-in-`/data` alone, so `configure.py`'s generated
+  `bin/user/extra_obs.py` etc. survive.
+
+Both mechanisms are no-ops when the hashes match, so a routine
+`docker compose restart weewx` (or host reboot) is cheap.
 
 ## Layout
 

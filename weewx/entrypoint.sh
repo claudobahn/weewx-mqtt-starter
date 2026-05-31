@@ -49,6 +49,29 @@ if [ ! -f "${CONF}" ]; then
   fi
   echo "Bootstrap complete."
 else
+  # Image-template reconciliation: /data was seeded from /opt/station on
+  # first run; later image rebuilds (new fuzzy-archer/, bumped extension
+  # pin, new configure.py defaults) update /opt/station but not the already-
+  # seeded /data. A build-time UUID stamp in /opt/station/.image-id lets us
+  # detect that mismatch and refresh skin + user-code assets in place. The
+  # config and database are left alone -- weewx.conf is configure.py-owned
+  # and the SDB carries all archive history. cp -a leaves files-only-in-
+  # /data alone, so configure.py's generated extra_obs.py etc. survive.
+  # After a refresh, invalidate the station.yaml hash so the block below
+  # re-runs configure.py (a new image may bring new skin.conf defaults
+  # that need station.yaml overrides re-applied on top).
+  if [ -f /opt/station/.image-id ]; then
+    current_image="$(cat /opt/station/.image-id)"
+    applied_image="$(cat "${WEEWX_ROOT}/.image-id" 2>/dev/null || true)"
+    if [ "${current_image}" != "${applied_image}" ]; then
+      echo "Image template changed since last start; refreshing skins + bin/user."
+      cp -a /opt/station/skins/. "${WEEWX_ROOT}/skins/"
+      [ -d /opt/station/bin/user ] && cp -a /opt/station/bin/user/. "${WEEWX_ROOT}/bin/user/"
+      echo "${current_image}" > "${WEEWX_ROOT}/.image-id"
+      rm -f "${WEEWX_ROOT}/.station-yaml.hash"
+    fi
+  fi
+
   # Auto-apply station.yaml on restart when it has changed since the last
   # apply. configure.py writes /data/.station-yaml.hash on success (both at
   # first-run bootstrap and via scripts/apply.sh), so comparing hashes here
