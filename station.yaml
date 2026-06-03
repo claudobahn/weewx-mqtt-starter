@@ -69,6 +69,21 @@ qc:
   extraTemp1:  { min: -40, max: 120, unit: degree_F }    # WH31B
   extraHumid1: { min: 0,   max: 100 }
 
+# ── Calibration / derived corrections ([StdCalibrate][[Corrections]]) ──────
+# Per-obs Python expressions over the same record's fields (+ the `math`
+# module), applied on loop + archive. Two uses:
+#   * adjust a reading for a known offset (sensor / mounting), e.g.
+#       windDir: "(windDir + 7) % 360"   # correct a misaligned mast
+#       outTemp: "outTemp - 0.4"
+#   * derive a new obs (StdCalibrate creates it; absent inputs are skipped),
+#     e.g. estimate solar radiation from a lux-only WS90:
+#       radiation: "luminosity * 0.0079"   # ~ lux / 126.7 (W/m^2)
+# Use ["expr", "loop"|"archive"] to restrict to one. Expressions must not
+# contain a comma (StdCalibrate splits expr,directive on commas).
+#
+# calibrate:
+#   windDir: "(windDir + 7) % 360"
+
 # ── Optional sections ─────────────────────────────────────────────────────
 #
 # observations: []        # custom obs types -> generated user/extra_obs.py

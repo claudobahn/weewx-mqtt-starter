@@ -233,6 +233,34 @@ def apply_qc(c, qc):
         mm[obs] = out
 
 
+def apply_calibrate(c, calibrate):
+    """[StdCalibrate][[Corrections]]: per-obs Python correction expressions.
+
+    YAML: { <obs>: "<expr>" }  or  { <obs>: ["<expr>", "loop"|"archive"] }.
+
+    Each <expr> is evaluated by weewx's StdCalibrate (already in the default
+    process_services chain, after StdConvert) against the record's fields plus
+    the `math` module, on both loop packets and archive records (or only the
+    given directive). Two uses:
+      * Calibration -- adjust a reading for a known offset, e.g.
+        windDir: "(windDir + 7) % 360"  for a misaligned mast, or
+        outTemp:  "outTemp - 0.4".
+      * Derivation -- StdCalibrate assigns the result unconditionally and
+        skips (NameError, caught) when an input is absent, so it can CREATE a
+        new obs, e.g. radiation: "luminosity * 0.0079" to estimate W/m^2 from
+        a lux-only WS90 (the obs must exist in the schema to be archived).
+
+    Cleared and rebuilt each run (drops weectl's default `foo` example), so
+    removing a key from YAML removes the correction. NB: an expression must
+    not contain a comma -- StdCalibrate splits `expr, directive` on commas, so
+    `max(a, b)` would be mis-parsed; the list form is only for the directive.
+    """
+    corr = c.setdefault("StdCalibrate", {}).setdefault("Corrections", {})
+    corr.clear()
+    for obs, expr in (calibrate or {}).items():
+        corr[obs] = [str(x) for x in expr] if isinstance(expr, list) else str(expr)
+
+
 def apply_units(c, units):
     """[StdReport][[Defaults]][[[Units]]][[[[Groups]]]]: per-group display units.
 
@@ -843,6 +871,7 @@ def main():
     apply_mqtt_and_sensors(c, yml.get("mqtt") or {}, yml.get("sensors") or {})
     apply_credentials(c)
     apply_qc(c, yml.get("qc") or {})
+    apply_calibrate(c, yml.get("calibrate") or {})
     apply_units(c, yml.get("units") or {})
     apply_labels(c, yml.get("labels") or {})
     apply_schema(c, yml.get("schema") or {})

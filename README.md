@@ -371,6 +371,7 @@ Top-level sections:
 | `mqtt` | broker host/port and the browser-facing WebSocket URL |
 | `sensors` | rtl_433 → WeeWX field map (the `[MQTTSubscribeDriver][[topics]]` content) |
 | `qc` | `[StdQC][[MinMax]]` bounds per observation (spoofing mitigation) |
+| `calibrate` *(opt)* | `[StdCalibrate][[Corrections]]` per-obs Python expressions — sensor/mounting offsets (`windDir: "(windDir + 7) % 360"`) or derived obs (`radiation: "luminosity * 0.0079"`) |
 | `observations` *(opt)* | new obs types — generates `user/extra_obs.py` + registers `obs_group_dict` |
 | `schema` *(opt)* | extra DB columns — generates `user/extra_schema.py` extending the stock schema |
 | `units` *(opt)* | force display units per group + define brand-new unit groups |
@@ -472,6 +473,7 @@ sections of `weewx.conf` / `skin.conf` and weewxd resumes.
 | `mqtt.broker` / `port` / `websocket_url` | Driver reconnects to the broker; dashboard JS reloads its WS endpoint. |
 | `sensors.sources[]` (add / edit / remove) | The new `[MQTTSubscribeDriver][[topics]]` is written in full each run, so removed sources go away too. |
 | `qc.*` bounds | Take effect on the next loop packet. |
+| `calibrate.*` corrections | Take effect on the next loop packet. Deriving a new obs (e.g. `radiation`) only back-fills going forward; historical archive rows stay empty. |
 | `units.*` display unit overrides, `labels.*`, `datetime_formats.*` | Skin-only; visible after the next report run. |
 | `dashboard.*` (`navigation`, `station_info`, `stats`, `history`, `news`, `live_gauges`, `live_charts`, `image_plots`) | Each subsection is *cleared and rebuilt* per run — drop a key to fall back to the skin default. |
 | `dashboard.timespan` (hours) | History window for live charts + wind-rose recent cutoff + browser-side data rotation. Single value drives all three; skin default is 27. Whole hours only. |
