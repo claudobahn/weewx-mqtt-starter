@@ -690,12 +690,15 @@ def _emit_copy(boot, copy_cfg):
 # ─── branding (user-provided files copied into the skin) ──────────────────
 
 BRANDING_TARGETS = {
-    # key in station.yaml.branding -> destination path in the skin
-    "logo":                lambda src: os.path.join(SKIN_DIR, "images", os.path.basename(src)),
-    "about_page":          lambda _:   os.path.join(SKIN_DIR, "about.html.tmpl"),
-    "nav_fragment":        lambda _:   os.path.join(SKIN_DIR, "nav.html.inc"),
-    "footer_fragment":     lambda _:   os.path.join(SKIN_DIR, "foot.html.inc"),
-    "livegauges_fragment": lambda _:   os.path.join(SKIN_DIR, "livegauges.html.inc"),
+    # key in station.yaml.branding -> destination path in the skin.
+    # Only the single primary logo gets a named key (it lands in the images/
+    # subdir like the rest of `images:`). Every HTML/template partial -- the
+    # skin's own include points (nav.html.inc, foot.html.inc, livegauges.html.inc),
+    # the generated about page (about.html.tmpl), and any extra partial a fragment
+    # #include's (e.g. radar.html.inc) -- goes through the generic `fragments:`
+    # list instead, since the skin references them all by fixed name. See
+    # apply_branding.
+    "logo": lambda src: os.path.join(SKIN_DIR, "images", os.path.basename(src)),
 }
 
 
@@ -715,11 +718,22 @@ def _branding_copy(rel_path, dst_path, label):
 def apply_branding(branding):
     """Copy user-provided files from ./branding/ into the fuzzy-archer skin.
 
-    Re-runs overwrite (idempotent for the files listed in YAML). Removing a key
-    does NOT restore the skin's original file (the upstream copy was overwritten
-    in /data) -- to revert, remove the file and let a fresh ./data seed re-seed
-    the skin from /opt/station. site_name / site_url are informational only;
-    the skin doesn't read them, but a user's own HTML fragments can.
+    Two kinds of files:
+      * logo: / images:  -> copied into the skin's images/ subdir (binary assets).
+      * fragments:       -> copied to the skin ROOT by name. ONE uniform mechanism
+                            for every HTML/template partial: the skin's own include
+                            points (nav.html.inc, foot.html.inc, livegauges.html.inc),
+                            the generated about page (about.html.tmpl), AND any extra
+                            partial a fragment #include's (e.g. radar.html.inc). The
+                            skin references all of them by fixed name, so each file's
+                            basename must match what the skin expects -- nothing is
+                            renamed.
+
+    Re-runs overwrite (idempotent for the files listed in YAML). Removing an entry
+    does NOT restore the skin's original file (the upstream copy was overwritten in
+    /data) -- to revert, remove the file and let a fresh ./data re-seed the skin
+    from /opt/station. site_name / site_url are informational only; the skin
+    doesn't read them, but a user's own HTML fragments can.
     """
     if not branding:
         return
@@ -730,6 +744,9 @@ def apply_branding(branding):
     for img_path in (branding.get("images") or []):
         _branding_copy(img_path, os.path.join(SKIN_DIR, "images", os.path.basename(img_path)),
                        f"images/{os.path.basename(img_path)}")
+    for frag_path in (branding.get("fragments") or []):
+        _branding_copy(frag_path, os.path.join(SKIN_DIR, os.path.basename(frag_path)),
+                       f"fragment/{os.path.basename(frag_path)}")
 
 
 # ─── logging ([Logging] section) ───────────────────────────────────────────
