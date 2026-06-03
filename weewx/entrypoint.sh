@@ -65,10 +65,24 @@ else
     applied_image="$(cat "${WEEWX_ROOT}/.image-id" 2>/dev/null || true)"
     if [ "${current_image}" != "${applied_image}" ]; then
       echo "Image template changed since last start; refreshing skins + bin/user."
-      cp -a /opt/station/skins/. "${WEEWX_ROOT}/skins/"
-      [ -d /opt/station/bin/user ] && cp -a /opt/station/bin/user/. "${WEEWX_ROOT}/bin/user/"
-      echo "${current_image}" > "${WEEWX_ROOT}/.image-id"
-      rm -f "${WEEWX_ROOT}/.station-yaml.hash"
+      # Non-fatal: this block is best-effort. `set -e` is active, so any
+      # failure here (a /data permission quirk, a read-only or full FS, an
+      # FS hiccup) would otherwise abort the script -> container exits ->
+      # restarts -> the stamp is still stale -> the mismatch never clears ->
+      # silent crash-loop. Guard the refresh so a failure logs a WARNING and
+      # falls through to weewxd on the previous /data instead. Only stamp
+      # .image-id once the copies AND the hash-invalidation succeed, so a
+      # partial refresh is retried next start rather than marked done.
+      # Mirrors the station.yaml block's keep-calm-and-carry-on handling.
+      if cp -a /opt/station/skins/. "${WEEWX_ROOT}/skins/" \
+         && { [ ! -d /opt/station/bin/user ] || cp -a /opt/station/bin/user/. "${WEEWX_ROOT}/bin/user/"; } \
+         && rm -f "${WEEWX_ROOT}/.station-yaml.hash" \
+         && echo "${current_image}" > "${WEEWX_ROOT}/.image-id"; then
+        :
+      else
+        echo "WARNING: image-template refresh failed; continuing on the" \
+             "previous /data. Will retry on the next start." >&2
+      fi
     fi
   fi
 
