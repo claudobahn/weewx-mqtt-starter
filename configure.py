@@ -542,7 +542,13 @@ def _emit_live_gauges(boot, gauges_cfg):
     """[[[LiveGauges]]] live_gauge_items + per-obs subsections.
 
     YAML: { items: [...], gauges: { <obs>: { payload_key, range: {min,max,splitnumber},
-            style: {<any fuzzy-archer key>: value} } } }.
+            style: {<any fuzzy-archer key>: value, <nested-block>: {...}} } } }.
+
+    Scalar style keys land at the gauge subsection root (matches fuzzy-archer's
+    flat <feature>Enabled pattern). Nested dicts under style (e.g. windRose)
+    emit as sub-subsections (configobj depth +1) so the skin can read them as
+    weewxData.gauges.<obs>.<block>.<key>. Recurses one level -- deeper
+    nesting on demand if a future fuzzy-archer feature needs it.
     """
     if not gauges_cfg:
         boot.pop("LiveGauges", None)
@@ -561,7 +567,11 @@ def _emit_live_gauges(boot, gauges_cfg):
             v = (spec.get("range") or {}).get(yaml_k)
             if v is not None:
                 g[conf_k] = _conv(v)
-        _passthrough(g, spec.get("style") or {})
+        style = spec.get("style") or {}
+        _passthrough(g, style)                            # scalar keys
+        for k, v in style.items():                        # nested dicts -> sub-sections
+            if isinstance(v, dict):
+                _passthrough(g.setdefault(k, {}), v)
         _passthrough(g, spec, skip=("payload_key", "range", "style"))
 
 
