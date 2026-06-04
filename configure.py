@@ -720,14 +720,16 @@ def apply_branding(branding):
 
     Two kinds of files:
       * logo: / images:  -> copied into the skin's images/ subdir (binary assets).
-      * fragments:       -> copied to the skin ROOT by name. ONE uniform mechanism
-                            for every HTML/template partial: the skin's own include
-                            points (nav.html.inc, foot.html.inc, livegauges.html.inc),
-                            the generated about page (about.html.tmpl), AND any extra
-                            partial a fragment #include's (e.g. radar.html.inc). The
-                            skin references all of them by fixed name, so each file's
-                            basename must match what the skin expects -- nothing is
-                            renamed.
+      * fragments:       -> copied into the skin preserving each entry's relative
+                            path. ONE uniform mechanism for every HTML/template
+                            partial: the skin's own include points (nav.html.inc,
+                            foot.html.inc, livegauges.html.inc), the generated about
+                            page (about.html.tmpl), and any extra partial a fragment
+                            #include's (e.g. radar.html.inc) -- all land at the skin
+                            root. An entry WITH a subpath (e.g. "js/charts.js") lands
+                            at that subpath, OVERWRITING the skin's own copy there --
+                            the escape hatch for replacing a shipped skin asset. Names
+                            must match what the skin references; nothing is renamed.
 
     Re-runs overwrite (idempotent for the files listed in YAML). Removing an entry
     does NOT restore the skin's original file (the upstream copy was overwritten in
@@ -745,8 +747,10 @@ def apply_branding(branding):
         _branding_copy(img_path, os.path.join(SKIN_DIR, "images", os.path.basename(img_path)),
                        f"images/{os.path.basename(img_path)}")
     for frag_path in (branding.get("fragments") or []):
-        _branding_copy(frag_path, os.path.join(SKIN_DIR, os.path.basename(frag_path)),
-                       f"fragment/{os.path.basename(frag_path)}")
+        # Preserve the entry's relative path under the skin (basename for a plain
+        # name; the subpath for e.g. "js/charts.js", which overwrites the skin's).
+        rel = frag_path[len("branding/"):] if frag_path.startswith("branding/") else frag_path
+        _branding_copy(frag_path, os.path.join(SKIN_DIR, rel), "fragment/" + rel)
 
 
 # ─── logging ([Logging] section) ───────────────────────────────────────────

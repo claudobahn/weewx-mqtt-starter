@@ -36,6 +36,12 @@ Two kinds of files, two keys:
 Paths are relative to this directory. The optional `branding/` prefix
 (e.g. `logo: branding/logo.png`) is also accepted — both work.
 
+A `fragments:` entry is copied preserving its relative path. A bare name lands
+at the skin root; an entry **with a subpath** (e.g. `js/charts.js`) lands at
+that subpath, **overwriting the skin's own file there**. That's the escape
+hatch for replacing a shipped skin asset — use it sparingly: a wholesale
+override is a full copy you have to keep in sync with the upstream skin.
+
 **Re-runs of `configure.py` overwrite the same target paths.** Removing a key
 from `station.yaml` does NOT restore the skin's original file (the upstream
 copy in `./data/skins/Bootstrap/` was overwritten). To revert, delete the file

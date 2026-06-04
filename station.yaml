@@ -104,7 +104,9 @@ qc:
 #     - livegauges.html.inc              #   override the gauge column
 #     - about.html.tmpl                  #   override the generated About page
 #     - radar.html.inc                   #   extra partial #include'd by another fragment
-#                                        # (each basename must match what the skin references)
+#                                        # (basename must match what the skin references; an
+#                                        #  entry WITH a subpath like js/charts.js lands there,
+#                                        #  overwriting that shipped skin file -- escape hatch)
 #
 # logging:                # [Logging] section -- handlers + formatters + root
 #   root:
