@@ -1,0 +1,50 @@
+#errorCatcher Echo
+<!DOCTYPE html>
+<html lang="$lang">
+#include "head.html.inc"
+<body>
+<!-- Menu navbar -->
+#include "nav.html.inc"
+<!-- Main container -->
+<div class="$global_main_container_classes">
+    <div class="row">
+        <!-- Gauge panel -->
+        #include "livegauges.html.inc"
+        <!-- Main panel -->
+        <div id="${global_main_panel_id}" class="${global_main_panel_classes}">
+
+            <h2>About</h2>
+            <p>This dashboard summarises weather data logged at the
+               <a href="https://www.sailingcenter.org">Milwaukee Community Sailing Center</a>
+               on the shore of Lake Michigan. Conditions are sampled every few seconds and an
+               archive record is written once a minute.</p>
+
+            <h2>How it works</h2>
+            <p>Sensor data flows from an
+               <a href="https://docs.openmqttgateway.com/">OpenMQTTGateway</a> receiver into a
+               <a href="https://mosquitto.org/">Mosquitto</a> MQTT broker, where
+               <a href="https://weewx.com">WeeWX</a> consumes it via the
+               <a href="https://github.com/weewx-mqtt/subscribe">weewx-mqtt/subscribe</a>
+               driver. WeeWX writes archive records, generates the static pages you're reading,
+               and re-publishes every loop packet via
+               <a href="https://github.com/weewx-mqtt/publish">weewx-mqtt/publish</a> so the
+               gauges and charts update live in your browser without polling.</p>
+
+            <p>The dashboard uses the
+               <a href="https://github.com/brewster76/fuzzy-archer">fuzzy-archer</a> skin
+               (Bootstrap + Apache ECharts). The radar loop is the UW-Madison Atmospheric &amp;
+               Oceanic Sciences composite for the Milwaukee region.</p>
+
+            <h2>Source</h2>
+            <p>Site customizations (location, sensors, dashboard, branding) are driven by
+               YAML configuration; see the
+               <a href="https://github.com/sailingcenter/weewx-mqtt">weewx-mqtt</a> repository,
+               <code>sailing-center</code> branch.</p>
+
+        </div>
+    </div>
+    #include "foot.html.inc"
+</div>
+#include "script.html.inc"
+</body>
+</html>

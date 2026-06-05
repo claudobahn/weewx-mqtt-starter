@@ -1,6 +1,14 @@
-# station.yaml — the single source of configurable truth for this deployment.
-# Secrets (MQTT account passwords, ACME email) stay in .env; configuration and
-# customization live here.
+# station.yaml — Milwaukee Community Sailing Center deployment.
+#
+# Sibling to the mast-buoy branch: standard weather-station observations
+# (outTemp / barometer / wind / humidity / rain / UV) from a single sensor
+# source. Driver path: MQTTSubscribe (real OMG/rtl_433 publishing JSON to the
+# broker; on this branch a synthetic mcsc-publisher service stands in for the
+# station hardware).
+#
+# Dashboard mirrors https://weewx.milwaukeesailing.net/ — the customizations
+# the MCSC site used to apply via a hand-patched fuzzy-archer fork
+# (claudobahn/fuzzy-archer:sailing_center) are expressed here as YAML.
 #
 # Read by configure.py at first-run bootstrap. To re-apply after editing:
 #     ./scripts/apply.sh           # (or just: docker compose restart weewx --
@@ -12,197 +20,454 @@
 
 # ── Identity ───────────────────────────────────────────────────────────────
 station:
-  location: "Sailing Center"
-  latitude: 37.808
-  longitude: -122.409
+  location: "Milwaukee Community Sailing Center"
+  latitude: 43.0452
+  longitude: -87.8866
   altitude:
-    value: 3
-    unit: foot                 # foot | meter
-  archive_interval: 60         # seconds (rtl_433 sensors transmit every ~9-16 s)
-  # IANA tz name (e.g. "America/Chicago", "Europe/London"). Picked up by the
-  # entrypoint before weewxd starts, so all timestamps -- current readings,
-  # archive records, news dates, the dashboard's "Last update" -- render in
-  # this zone. Defaults to the container's TZ (UTC for the python:3-slim base);
-  # the TZ env var on the weewx service (if set) takes precedence.
-  # timezone: "America/Chicago"
+    value: 597                  # matches the live MCSC dashboard
+    unit: foot
+  archive_interval: 60
+  timezone: "America/Chicago"   # picked up by entrypoint.sh before weewxd starts
 
-# ── MQTT broker (the driver subscribes and publish writes here) ───────────
+# ── MQTT broker ────────────────────────────────────────────────────────────
 mqtt:
-  broker: mqtt                 # docker service name; reachable over the docker network
+  broker: mqtt
   port: 1883
-  # WebSocket URL embedded in the public dashboard for live gauges. The
-  # WEEWX_WS_URL env var (set by overlays — prod uses wss://${DOMAIN}) wins
-  # over this value when present.
   websocket_url: "ws://localhost:9001"
 
-# ── Data ingestion (rtl_433 → WeeWX fields) ───────────────────────────────
-# Edit `sources` to match your sensors. Defaults describe a Fine Offset WS80
-# primary station and an Ambient Weather WH31B thermo-hygrometer relayed by
-# OpenMQTTGateway. See README "Multiple sensors" for the per-source schema.
+# ── Data ingestion (rtl_433 / OMG → WeeWX fields) ─────────────────────────
+# Three real-hardware-equivalent devices:
+#   * Fine Offset WS90    -- primary weather station (wind / temp / humidity /
+#                            UV / rain). No barometer or W/m^2 radiation
+#                            natively -- those would come from an indoor
+#                            gateway (e.g. GW1100) and aren't mapped yet, so
+#                            the barometer gauge + radiation chart stay empty
+#                            until that source is wired.
+#   * Fine Offset WH57    -- lightning detector (strike count + distance).
+#                            strike_count is cumulative; weewx contains_total
+#                            mode computes the per-interval delta.
+#   * AmbientWeather-WH31B -- backup outdoor temp/humidity on channel 1
+#                            (msg_id_field 'channel' suffixes per-channel
+#                            field names: temperature_C_1, humidity_1, ...).
+# Until real hardware (or an OMG bridge) is online, mcsc-publisher stands in
+# with rtl_433-shaped JSON on the same topics.
 sensors:
-  unit_system: US              # US | METRIC | METRICWX
+  unit_system: US
   sources:
-    - name: primary
-      topic: home/+/RTL_433toMQTT/Fineoffset-WS80/+
+    - name: ws90
+      topic: home/+/RTL_433toMQTT/Fineoffset-WS90/+
       fields:
         temperature_C: { name: outTemp,     units: degree_C }
         humidity:      { name: outHumidity }
+        # NB: this WS90 has no barometer (verified from a live capture). Station
+        # pressure now comes from a dedicated Fine Offset WH32B (see wh32b-baro
+        # below) -> `pressure` -> StdWXCalculate-derived sea-level `barometer`.
         wind_avg_m_s:  { name: windSpeed,   units: meter_per_second }
         wind_max_m_s:  { name: windGust,    units: meter_per_second }
         wind_dir_deg:  { name: windDir }
         uvi:           { name: UV }
-        rain_mm:       { name: rain, units: mm, contains_total: true }   # WS90 only
+        light_lux:     { name: luminosity }                                # group_illuminance; lux has no convertibles in weewx
+        rain_mm:       { name: rain,        units: mm, contains_total: true }
+    - name: wh57
+      # rtl_433 emits "FineOffset-WH31L" as the model string for the WH57
+      # lightning detector -- the product is sold as WH57, decoded internally
+      # as WH31L. The topic + field names below MUST match rtl_433's emission.
+      topic: home/+/RTL_433toMQTT/FineOffset-WH31L/+
+      fields:
+        strike_count:  { name: lightning_strike_count, contains_total: true }
+        storm_dist_km: { name: lightning_distance, units: km }
     - name: wh31b-ch1
-      topic: home/+/RTL_433toMQTT/AmbientWeather-WH31B/+
-      msg_id_field: channel    # field per channel: temperature_C_<n>, humidity_<n>
+      # OMG's WH31B topic has an extra level for the channel:
+      #   home/<gw>/RTL_433toMQTT/AmbientWeather-WH31B/<channel>/<id>
+      # vs. single-device sensors (WS90, WH57) which collapse to .../<id>.
+      # Subscribe to all channels here; the per-channel field config below
+      # (temperature_C_1) only picks up channel 1 thanks to msg_id_field.
+      topic: home/+/RTL_433toMQTT/AmbientWeather-WH31B/+/+
+      msg_id_field: channel
       fields:
         temperature_C_1: { name: extraTemp1, units: degree_C }
         humidity_1:      { name: extraHumid1 }
+    - name: wh32b-baro
+      # Fine Offset WH32B -- dedicated barometric pressure sensor (id 79 on the
+      # OMG_heltec gateway). Also reports temperature_C / humidity, left UNMAPPED
+      # on purpose: outdoor temp/humidity come from the WS90; the WH32B's are its
+      # own (likely sheltered) readings.
+      #   pressure_hPa -> `pressure` (station/absolute). StdWXCalculate
+      #   (barometer = prefer_hardware) derives the sea-level `barometer` from
+      #   pressure + the 597 ft altitude + outTemp -- this lights up the barometer
+      #   gauge + obs. (Mapping straight to `barometer` would skip the altitude
+      #   correction and read ~0.6 inHg low.)
+      topic: home/+/RTL_433toMQTT/Fineoffset-WH32B/+
+      fields:
+        pressure_hPa: { name: pressure, units: hPa }
 
-# ── Quality-control bounds (drop spoofed / out-of-range / inf/nan values) ─
-# weewx ships defaults for outTemp/outHumidity/windSpeed/barometer/etc.; the
-# rest of this stack's observations get bounded here. Tune to your climate.
+# ── Quality-control bounds ────────────────────────────────────────────────
 qc:
-  windGust:    { min: 0,   max: 120, unit: mile_per_hour }
-  windDir:     { min: 0,   max: 360, unit: degree_compass }
-  UV:          { min: 0,   max: 20 }
-  extraTemp1:  { min: -40, max: 120, unit: degree_F }    # WH31B
-  extraHumid1: { min: 0,   max: 100 }
+  windSpeed:           { min: 0,   max: 100, unit: mile_per_hour }
+  windGust:            { min: 0,   max: 120, unit: mile_per_hour }
+  windDir:             { min: 0,   max: 360, unit: degree_compass }
+  UV:                  { min: 0,   max: 20 }
+  rainRate:            { min: 0,   max: 10,  unit: inch_per_hour }
+  lightning_distance:  { min: 0,   max: 100, unit: km }
+  extraTemp1:          { min: -40, max: 120, unit: degree_F }
+  extraHumid1:         { min: 0,   max: 100 }
 
 # ── Calibration / derived corrections ([StdCalibrate][[Corrections]]) ──────
-# Per-obs Python expressions over the same record's fields (+ the `math`
-# module), applied on loop + archive. Two uses:
-#   * adjust a reading for a known offset (sensor / mounting), e.g.
-#       windDir: "(windDir + 7) % 360"   # correct a misaligned mast
-#       outTemp: "outTemp - 0.4"
-#   * derive a new obs (StdCalibrate creates it; absent inputs are skipped),
-#     e.g. estimate solar radiation from a lux-only WS90:
-#       radiation: "luminosity * 0.0079"   # ~ lux / 126.7 (W/m^2)
-# Use ["expr", "loop"|"archive"] to restrict to one. Expressions must not
-# contain a comma (StdCalibrate splits expr,directive on commas).
-#
-# calibrate:
-#   windDir: "(windDir + 7) % 360"
+# Estimate solar radiation (W/m^2) from the WS90's lux sensor. The WS90 has
+# no pyranometer -- it reports light_lux (-> luminosity), and the standard
+# conversion (the same one Ecowitt consoles use) is W/m^2 ~= lux / 126.7
+# (x 0.0079). StdCalibrate creates `radiation` from luminosity on each loop +
+# archive record; this is what populates the radiation live chart + day/week
+# PNG plots (empty until now since the WS90 sends no radiation). It's an
+# estimate for daylight, not a calibrated measurement. Drop this if a real
+# radiation source (pyranometer / Ecowitt console) is ever wired -- otherwise
+# the correction would overwrite the real reading.
+calibrate:
+  radiation: "luminosity * 0.0079"
 
-# ── Optional sections ─────────────────────────────────────────────────────
-#
-# observations: []        # custom obs types -> generated user/extra_obs.py
-# schema: { ... }         # custom DB schema -> generated user/extra_schema.py
-# units: { ... }          # display unit overrides per unit group
-# labels: { ... }         # [Labels][Generic] display-name overrides
-# datetime_formats: {...} # date/time format strings
-#
-# branding:               # user-provided files copied into the skin (./branding/)
-#   site_name: "Your Org"               # informational; for your own HTML to reference
-#   site_url:  "https://example.org"
-#   logo:     logo.png                   # -> skins/Bootstrap/images/logo.png
-#   images:                              # extras copied to skins/Bootstrap/images/
-#     - deployment.jpg
-#   fragments:                           # HTML/template partials -> skins/Bootstrap/<name>
-#     - nav.html.inc                     #   override the skin's nav
-#     - foot.html.inc                    #   override the skin's footer
-#     - livegauges.html.inc              #   override the gauge column
-#     - about.html.tmpl                  #   override the generated About page
-#     - radar.html.inc                   #   extra partial #include'd by another fragment
-#                                        # (basename must match what the skin references; an
-#                                        #  entry WITH a subpath like js/charts.js lands there,
-#                                        #  overwriting that shipped skin file -- escape hatch)
-#
-# logging:                # [Logging] section -- handlers + formatters + root
-#   root:
-#     level: INFO
-#     handlers: [console, timed_rotate]
-#   handlers:
-#     timed_rotate:
-#       class: logging.handlers.TimedRotatingFileHandler
-#       level: DEBUG
-#       formatter: verbose
-#       filename: "logs/{process_name}.log"
-#       when: midnight
-#       backupCount: 7
-#   # formatters: { ... }   # optional, weewx defines "verbose" and "simple" already
-#
-# services:               # extra entries in weewx's *_services chains;
-#   prep:    [user.mast_obs.MASTObservations]   # files must live in ./user/<name>.py
-#   data:    []
-#   restful: []
+# ── Display units (wind in knots, like the live MCSC dashboard) ───────────
+units:
+  groups:
+    group_speed: knot
 
-# ── Dashboard overrides (fuzzy-archer skin) ───────────────────────────────
-# Each subsection overrides the same-named section in skin.conf. Omit a key to
-# keep the skin's default. Omit `dashboard:` entirely to keep ALL the defaults.
-# Re-runs of configure.py are idempotent (sections are cleared and rebuilt).
-#
-# Uncomment and adjust:
-#
-# dashboard:
-#   # History window (hours) for the live charts + the wind rose overlay's
-#   # "recent" cutoff + the browser-side data rotation (older points shift off
-#   # the front as new MQTT samples arrive). One value drives all three; the
-#   # skin's default is 27 -- drop to 3-6 for a "current conditions" dashboard,
-#   # raise to 48-72 for trend analysis. Whole hours only.
-#   timespan: 27
-#
-#   # Top nav + sidebar
-#   navigation:   [index, stats, history, news, about]
-#   station_info: [location, sunRiseSet, moonphase, uptime]
-#
-#   # Stats / history tabs
-#   stats:
-#     items: [wind, outTemp, outHumidity]
-#     aggregations:
-#       outHumidity: [avg]               # adds [[[[outHumidity]]]] [[[[[avg]]]]]
-#   history:
-#     items: [max_wind, NOAA]
-#
-#   # News entries (one [[[[<title>]]]] subsection each)
-#   news:
-#     - date: "May 5, 2025"              # used as the subsection title
-#       header: "Buoy Deployed"
-#       body:   "The Marquette team deployed the buoy in calm conditions."
-#       img:    { src: "images/deployment.jpg", alt: "Buoy crew" }
-#
-#   # Browser-side gauges. `range:` and `payload_key` are semantic; everything
-#   # under `style:` (and any extra top-level keys on a gauge) passes through to
-#   # fuzzy-archer verbatim -- see skin.conf [LiveGauges] for the full key list.
-#   live_gauges:
-#     items: [windSpeed, windDir]        # ordering; defaults to keys of `gauges`
-#     gauges:
-#       windSpeed:
-#         payload_key: windSpeed_knot    # match your unit_system / [StdConvert]
-#         range: { min: 0, max: 50, splitnumber: 10 }
-#         style:
-#           lineColor:      ["#428bca", "#b44242"]
-#           lineColorUntil: [22, maxvalue]   # strong-breeze threshold
-#           decimals: 1
-#       windDir:                         # circular direction gauge
-#         payload_key: windDir
-#         style: { lineColorN: "#428bca", lineColorS: "#b44242", decimals: 0 }
-#
-#   # Browser-side line/scatter charts. Two-level nesting: chart -> series.
-#   live_charts:
-#     items: [wind]
-#     show_daynight: true                # any chart-level keys pass through
-#     charts:
-#       wind:
-#         series:
-#           - { obs: windSpeed, payload_key: windSpeed_mph, style: { decimals: 0 } }
-#           - { obs: windGust,  payload_key: windGust_mph,  style: { showMaxMarkPoint: true } }
-#
-#   # Static day/week/month/year PNG plots from weewx's ImageGenerator.
-#   image_plots:
-#     common:                            # keys at [[[ImageGenerator]]] root
-#       daynight_day_color:   "0xffffff"
-#       daynight_night_color: "0xf0f0f0"
-#     day:
-#       style: { line_type: "none", marker_size: 3, marker_type: "cross" }
-#       items:
-#         dayWind:    { yscale: [0, null, 1.0], series: [windSpeed] }
-#         dayWindDir: { yscale: [0, 360, 45.0], series: [windDir] }
-#     week:
-#       style: { aggregate_interval: 600 }
-#       items:
-#         weekWind:
-#           yscale: [0, null, 1.0]
-#           series:
-#             - windSpeed                # bare obs name -> empty subsection
-#             - { obs: windGust, aggregate_type: max }
+# ── Labels (gauge titles + chart labels) ──────────────────────────────────
+# Only two overrides needed: weewx's defaults already give us "Wind Speed",
+# "Wind Direction", "Gust Speed", "Barometer" -- matching the live MCSC site.
+labels:
+  outTemp:     "Temperature"
+  outHumidity: "Humidity"
+
+# ── Dashboard (fuzzy-archer skin overrides) ───────────────────────────────
+dashboard:
+  # 3-hour history window. Drives the live charts' x-axis, the wind rose's
+  # "recent" sample cutoff, and the browser-side data rotation (older points
+  # shift off as new MQTT samples arrive). Tight on purpose -- MCSC is a
+  # current-conditions dashboard; the static day/week/month/year PNGs cover
+  # longer-term trends. Default in fuzzy-archer's stock skin is 27 hours.
+  timespan: 3
+
+  navigation:   [index, stats, history, about]    # no news section on MCSC
+  station_info: [location, sunRiseSet, moonphase]    # dropped rain + uptime (station/server)
+
+  # v4.4 defaults for stats / history are richer than MCSC's old skin
+  # (alltime min/avg/max columns, °F gradient HistoryColors, NOAA report). Keep
+  # them: omit `stats:` and `history:` here and the skin's built-in items show.
+
+  live_gauges:
+    # Slot 1 is windDir -- the standard v4.4 direction gauge (full 360 arc +
+    # needle + N/E/S/W cardinal labels). The wind-rose widget JS in
+    # branding/livegauges.html.inc reaches into THIS gauge's ECharts instance
+    # (via echarts.getInstanceByDom) and splices in a polar coord system + 4
+    # stacked bar series for the rose data on top.
+    items: [windDir, windSpeed, outTemp, windGust, outHumidity, barometer]
+    gauges:
+      windDir:
+        payload_key: windDir
+        # The wind rose overlay is built into the fork's gauges.js -- the
+        # windRoseEnabled flag + the windRose sub-block configure a 16-sector
+        # x 4-bin polar bar chart spliced into this gauge's chart, sized as
+        # percentage of the recent timespan. bins are upper-bounds in display
+        # units (knots here, via group_speed=knot); the last segment sweeps
+        # everything above the previous max.
+        # heatMapEnabled: false drops the redundant heat ring; axisLineEnabled
+        # hides the colored outer arc -- both set on every gauge below.
+        style:
+          lineColorN: "#000"
+          lineColorS: "#000"
+          decimals: 0
+          detailColor: "#428bca"        # value-readout colour
+          detailFontSize: 14
+          stuckNeedleEnabled: false
+          heatMapEnabled: false
+          axisLineEnabled: false
+          labelFontSize: 14
+          # Gauge history window in hours -- the heat ring (other gauges) and
+          # the wind rose (here) reflect this, independent of the live charts'
+          # 3h dashboard.timespan. 1h gives a current frequency distribution.
+          # Unset -> falls back to the chart timespan. (windDir's heat ring is
+          # off, so here it only drives the rose.)
+          historyTimespan: 1
+          windRoseEnabled: true
+          windRose:
+            # Gust is the more sailing-meaningful signal than average wind --
+            # the rose answers "where do the dangerous puffs come from" rather
+            # than "where does the steady breeze come from". Matches the
+            # claudobahn/fuzzy-archer:sailing_center legacy fork's behaviour.
+            speedObs: windGust
+            bins:    [10, 15, 20]
+            colors:  ["#ddd", "#ffc000", "#00b050", "#000000"]
+            labels:
+              - "Light air (0-10 kt)"
+              - "Medium air (10-15 kt)"
+              - "Heavy air (15-20 kt)"
+              - "No sailing (>20 kt)"
+      outTemp:
+        payload_key: outTemp_F
+        range: { min: 0, max: 100, splitnumber: 10 }
+        style:
+          lineColor:      ["#428bca", "#b44242"]
+          lineColorUntil: [80, maxvalue]
+          decimals: 1
+          detailColor: "#428bca"        # value-readout colour
+          detailFontSize: 14
+          stuckNeedleEnabled: false
+          axisLineEnabled: false
+          labelFontSize: 14
+          historyTimespan: 1            # heat ring = last 1h
+      barometer:
+        payload_key: barometer_inHg
+        range: { min: 29.0, max: 31.0, splitnumber: 5 }   # 0.4 steps -> 6 labels (10 was too snug at the top)
+        style:
+          lineColor:      ["#b44242", "#000", "#428bca"]
+          lineColorUntil: [29.80, 30.20, maxvalue]
+          decimals: 2
+          detailColor: "#428bca"        # value-readout colour
+          detailFontSize: 14
+          stuckNeedleEnabled: false
+          axisLineEnabled: false
+          labelFontSize: 14
+          historyTimespan: 1            # heat ring = last 1h
+      outHumidity:
+        payload_key: outHumidity            # bare -- MQTTPublish emits group_percent un-suffixed (NOT outHumidity_pct)
+        range: { min: 0, max: 100, splitnumber: 10 }
+        style: { detailColor: "#428bca", detailFontSize: 14, decimals: 0, stuckNeedleEnabled: false, axisLineEnabled: false, labelFontSize: 14, historyTimespan: 1 }
+      windSpeed:
+        # MQTTPublish emits storage units (US = mph) regardless of display group.
+        # Browser convert() reads observationType + obs_group and renders in knots.
+        payload_key: windSpeed_mph
+        range: { min: 0, max: 50, splitnumber: 10 }
+        style:
+          lineColor:      ["#aaa", "#ffc000", "#00b050", "#000000"]
+          lineColorUntil: [10, 15, 20, maxvalue]
+          decimals: 0
+          detailColor: "#428bca"        # value-readout colour
+          detailFontSize: 14
+          stuckNeedleEnabled: false
+          axisLineEnabled: false
+          labelFontSize: 14
+          historyTimespan: 1            # heat ring = last 1h
+      windGust:
+        payload_key: windGust_mph
+        range: { min: 0, max: 50, splitnumber: 10 }
+        style:
+          lineColor:      ["#aaa", "#ffc000", "#00b050", "#000000"]
+          lineColorUntil: [10, 15, 20, maxvalue]
+          decimals: 0
+          detailColor: "#428bca"        # value-readout colour
+          detailFontSize: 14
+          stuckNeedleEnabled: false
+          axisLineEnabled: false
+          labelFontSize: 14
+          historyTimespan: 1            # heat ring = last 1h
+
+  live_charts:
+    items: [windSpeed, windDir, outTemp, barometer, rain, outHumidity, lightning_strikes, radiation]
+    charts:
+      windSpeed:
+        # showRollingIqrBandMinutes draws a translucent rolling interquartile
+        # (Q1-Q3) band behind each series -- the spread of the last N minutes
+        # of wind, centred on the window midpoint (so it tracks rather than
+        # lags). Trying a 10-min window.
+        series:
+          - { obs: windSpeed, payload_key: windSpeed_mph,
+              style: { showMaxMarkPoint: true, showMinMarkPoint: true,
+                       lineColor: "#428bca", lineWidth: 0, symbol: circle, symbolSize: 3, decimals: 1,
+                       showRollingIqrBandMinutes: 10 } }
+          - { obs: windGust,  payload_key: windGust_mph,
+              style: { lineColor: "#b44242", lineWidth: 0, symbol: circle, symbolSize: 3, decimals: 1,
+                       showRollingIqrBandMinutes: 10 } }
+      windDir:
+        series:
+          - { obs: windDir, payload_key: windDir, style: { symbolSize: 3 } }
+      # outTemp + outHumidity use the fuzzy-archer skin defaults verbatim
+      # (outTemp: outTemp + dewpoint as mark-point lines; outHumidity: a single
+      # mark-point line). They stay in `items` above but are intentionally
+      # ABSENT from `charts` so the skin defaults apply unmodified. The skin's
+      # payload_keys (outTemp_F, dewpoint_F, outHumidity) already match this
+      # stack's MQTTPublish output, so live updates work without an override.
+      rain:
+        # Tighten the bucket window from the skin default 1800s (30 min) to
+        # 600s (10 min) so a 3-hour dashboard.timespan renders ~18 bars
+        # instead of 6 -- matches the visual density of the line charts.
+        # plotType=bar / aggregateType=sum / payload_key=rain_in / lineColor
+        # stay at skin defaults via configobj merge.
+        series:
+          - { obs: rain, style: { aggregateInterval: 600 } }
+      lightning_strikes:
+        # The skin default supplies both series (lightning_distance scatter +
+        # lightning_strike_count scatter) with all their styling -- we only
+        # need to attach the live-MQTT payload keys so weewx-mqtt/publish's
+        # unit-label-suffixed emissions (lightning_distance_mile +
+        # lightning_strike_count_count) feed in as they arrive. All other
+        # attributes (plotType, symbol, lineColor, dataReferences, etc.) stay
+        # at skin defaults via configobj merge.
+        series:
+          - { obs: lightning_distance,     payload_key: lightning_distance_mile }
+          - { obs: lightning_strike_count, payload_key: lightning_strike_count_count }
+      radiation:
+        # Skin default is a 3-series solar chart: radiation (gold line) +
+        # maxSolarRad (lighter-gold clear-sky ceiling, same hue) + UV (purple
+        # bars on a 2nd axis). Restore that styling; only override the two
+        # payload_keys the skin leaves un-suffixed (radiation, maxSolarRad) so
+        # live MQTT matches this stack's append_unit_label keys. UV's bare key
+        # already matches, so the UV series is inherited untouched.
+        series:
+          - { obs: radiation,   payload_key: radiation_Wpm2 }
+          - { obs: maxSolarRad, payload_key: maxSolarRad_Wpm2 }
+
+  # PNG plots (day/week/month/year pages, plus the index thumbnails when used):
+  # match the light day/night band palette that mast-buoy ships with, instead
+  # of v4.4's default darker gray (0xdfdfdf / 0xbbbbbb). The live MCSC site
+  # has the same light scheme baked into its WeeWX-4-era skin patches.
+  image_plots:
+    common:
+      daynight_day_color:   "0xffffff"
+      daynight_night_color: "0xf0f0f0"
+      daynight_edge_color:  "0xf5f5f5"
+
+    # Per-timespan: wind comes first on every page (it's a sailing
+    # dashboard); UV/radiation are shown on day and week (meaningful at
+    # those timescales for sun exposure planning) but omitted at month/
+    # year where the noise smooths into uninformative bands. Wind plots
+    # use cross markers instead of lines -- gust readings are inherently
+    # noisy and a scatter pattern is more honest than connecting them.
+    # The default fuzzy-archer skin already styles winddir as scatter;
+    # this brings windSpeed/windGust into the same scatter idiom. Temp
+    # plots add windchill alongside outTemp + dewpoint for sailing
+    # relevance (apparent temperature matters more than ambient when
+    # crew comfort is the question).
+
+    day:
+      items:
+        daywind-Bootstrap:
+          style: { line_type: none, marker_size: 3, marker_type: cross }
+          series: [windSpeed, windGust]
+        daywinddir-Bootstrap:
+          series: [windDir]
+        daytemp-Bootstrap:
+          series: [outTemp, dewpoint, windchill]
+        daybarometer-Bootstrap:
+          series: [barometer]
+        dayrain-Bootstrap:
+          series:
+            - obs: rain
+              aggregate_type: sum
+              aggregate_interval: 3600
+              label: "Rain (hourly total)"
+        dayhumidity-Bootstrap:
+          yscale: [null, 100, 5]
+          series: [outHumidity]
+        dayUV-Bootstrap:
+          yscale: [0, 12, 1]
+          series: [UV]
+        dayradiation-Bootstrap:
+          yscale: [0, null, 100]
+          series: [radiation]
+
+    week:
+      items:
+        weekwind-Bootstrap:
+          style: { line_type: none, marker_size: 1, marker_type: cross }
+          series:
+            - windSpeed
+            - { obs: windGust, aggregate_type: max }
+        weekwinddir-Bootstrap:
+          series: [windDir]
+        weektemp-Bootstrap:
+          series: [outTemp, dewpoint, windchill]
+        weekbarometer-Bootstrap:
+          series: [barometer]
+        weekrain-Bootstrap:
+          series:
+            - obs: rain
+              aggregate_type: sum
+              aggregate_interval: 10800        # 3-hour buckets
+              label: "Rain (3h total)"
+        weekhumidity-Bootstrap:
+          yscale: [null, 100, 5]
+          series: [outHumidity]
+        weekUV-Bootstrap:
+          yscale: [0, 12, 1]
+          series: [UV]
+        weekradiation-Bootstrap:
+          yscale: [0, null, 100]
+          series: [radiation]
+
+    month:
+      items:
+        monthwind-Bootstrap:
+          series:
+            - windSpeed
+            - { obs: windGust, aggregate_type: max }
+        monthwinddir-Bootstrap:
+          series: [windDir]
+        monthtemp-Bootstrap:
+          series: [outTemp, dewpoint, windchill]
+        monthbarometer-Bootstrap:
+          series: [barometer]
+        monthrain-Bootstrap:
+          series:
+            - obs: rain
+              aggregate_type: sum
+              aggregate_interval: 86400       # daily totals
+        monthhumidity-Bootstrap:
+          yscale: [null, 100, 5]
+          series: [outHumidity]
+
+    year:
+      items:
+        yearwind-Bootstrap:
+          series:
+            - windSpeed
+            - { obs: windGust, aggregate_type: max }
+        yearwinddir-Bootstrap:
+          series: [windDir]
+        yeartempmaxmin-Bootstrap:
+          # Inherits the skin's daily max/min temperature envelope.
+          series: []
+        yearbarometer-Bootstrap:
+          series: [barometer]
+        yearrain-Bootstrap:
+          series:
+            - obs: rain
+              aggregate_type: sum
+              aggregate_interval: 2592000     # monthly totals
+        yearhumidity-Bootstrap:
+          yscale: [null, 100, 5]
+          series: [outHumidity]
+
+  # Ensure the MCSC logo lands in public_html on every run.
+  copy:
+    always: [images/*]
+
+# ── Branding (MCSC logo + nav/foot/about + radar widget in livegauges) ────
+branding:
+  site_name: "MCSC"
+  site_url:  "https://www.sailingcenter.org"
+  images:
+    - images/mcsc_2023_logo_629x104.png
+  fragments:                                    # HTML/template partials -> skin root
+    - nav.html.inc                              # MCSC navbar
+    - foot.html.inc                             # MCSC footer
+    - livegauges.html.inc                       # gauge column; #include's radar.html.inc
+    - about.html.tmpl                           # MCSC About page (generated page)
+    - radar.html.inc                            # AOS radar loop (included by livegauges)
+
+# ── Logging (file rotation) ───────────────────────────────────────────────
+logging:
+  root:
+    level: INFO
+    handlers: [console, timed_rotate]
+  handlers:
+    console:
+      class: logging.StreamHandler
+      level: INFO
+      formatter: verbose
+      stream: ext://sys.stdout
+    timed_rotate:
+      class: logging.handlers.TimedRotatingFileHandler
+      level: INFO
+      formatter: verbose
+      filename: "logs/{process_name}.log"
+      when: midnight
+      backupCount: 7
