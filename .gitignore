@@ -17,3 +17,11 @@
 /mosquitto/certs/
 
 .idea
+
+/backups/
+
+# Local fuzzy-archer checkout, vendored TEMPORARILY for upstream-candidate
+# patch development on this sailing-center branch. The Dockerfile installs
+# from here (COPY fuzzy-archer/); gitignored because it's a separate repo
+# with its own history -- iterate inside it, push to claudobahn/fuzzy-archer.
+/fuzzy-archer/

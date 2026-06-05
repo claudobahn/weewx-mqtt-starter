@@ -20,11 +20,24 @@ ARG WEEWX_VERSION=5.3.1
 #   - tolerate absent [[Defaults]][[[Units]]] / [[[Labels]]] override sections
 # Once any of those merge to brewster76/fuzzy-archer:master and a release
 # tag is cut, flip the URL back to brewster76 and pin FUZZY_REF to that tag.
+#
+# OVERRIDE ON THIS BRANCH ONLY: sailing-center is the active development bed
+# for further fuzzy-archer patches, so the install line below is replaced
+# with a local-COPY form -- the host's ./fuzzy-archer/ checkout (gitignored)
+# is COPYd into the build context and weectl installs directly from there.
+# Iterate by editing files in ./fuzzy-archer/ and running
+# `docker compose build weewx`. The fork-pin args below stay as documentation
+# of where the patches eventually live; they're unused while the local form
+# is active. To return to the fork URL, drop the COPY + revert the install
+# line to the FUZZY_REPO/FUZZY_REF form (see main's Dockerfile).
 ARG PUBLISH_REF=refs/tags/v1.1.0-rc04a
 ARG SUBSCRIBE_REF=72a9d1dcc1cad5c063cd04b4ef9df6d0608be7e7
 ARG FUZZY_REPO=claudobahn/fuzzy-archer
 ARG FUZZY_REF=refs/heads/jsonengine-fixes
 ENV PIP_ROOT_USER_ACTION=ignore
+
+# Local fuzzy-archer source for active patch development on this branch.
+COPY fuzzy-archer/ /tmp/fuzzy-archer/
 
 # WeeWX + almanac (ephem) + the MQTT client the extensions use + pyyaml (read by
 # configure.py) + tzlocal (used by fuzzy-archer's jsonengine.py to resolve the
@@ -49,7 +62,8 @@ RUN weectl station create --no-prompt /data \
  && printf '\n[Logging]\n    [[root]]\n        level = INFO\n        handlers = console,\n' >> /data/weewx.conf \
  && weectl extension install "https://github.com/weewx-mqtt/publish/archive/${PUBLISH_REF}.zip" --yes --config /data/weewx.conf \
  && weectl extension install "https://github.com/weewx-mqtt/subscribe/archive/${SUBSCRIBE_REF}.zip" --yes --config /data/weewx.conf \
- && weectl extension install "https://github.com/${FUZZY_REPO}/archive/${FUZZY_REF}.zip" --yes --config /data/weewx.conf \
+ && weectl extension install /tmp/fuzzy-archer --yes --config /data/weewx.conf \
+ && rm -rf /tmp/fuzzy-archer \
  && mv /data /opt/station \
  && mkdir -p /data \
  && python3 -c "import uuid; open('/opt/station/.image-id', 'w').write(str(uuid.uuid4()))" \
