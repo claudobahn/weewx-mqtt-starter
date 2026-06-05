@@ -261,7 +261,7 @@ dashboard:
           historyTimespan: 1            # heat ring = last 1h
 
   live_charts:
-    items: [windSpeed, windDir, outTemp, barometer, rain, outHumidity, lightning_strikes, radiation]
+    items: [windSpeed, windDir, outTemp, barometer, rainAndRate, outHumidity, lightning_strikes, radiation]
     charts:
       windSpeed:
         # showRollingIqrBandMinutes is omitted on purpose: the windStatInject
@@ -284,14 +284,35 @@ dashboard:
       # ABSENT from `charts` so the skin defaults apply unmodified. The skin's
       # payload_keys (outTemp_F, dewpoint_F, outHumidity) already match this
       # stack's MQTTPublish output, so live updates work without an override.
-      rain:
-        # Tighten the bucket window from the skin default 1800s (30 min) to
-        # 600s (10 min) so a 3-hour dashboard.timespan renders ~18 bars
-        # instead of 6 -- matches the visual density of the line charts.
-        # plotType=bar / aggregateType=sum / payload_key=rain_in / lineColor
-        # stay at skin defaults via configobj merge.
+      # rainAndRate: a bespoke chart (NOT the skin's obs-named `rain` chart, which is
+      # dropped from `items` above) overlaying the instantaneous rain rate as a line
+      # over the accumulation bars. A fresh chart name has no skin default to merge
+      # against, so the series order written here is preserved end-to-end -- and
+      # charts.js gives the highest z (draw-on-top) to the FIRST series, so rainRate
+      # must precede rain to render over the bars. (The skin's single-axis `rain`
+      # chart can't do this: its baked `rain` series always merges first, so the bars
+      # would always win the z-order.)
+      #
+      # Two y-axes: rain is bucketed accumulation (inch, left/axis 0); rainRate is an
+      # instantaneous rate (inch/hr, right/axis 1) -- different units + scales, same
+      # pattern as the radiation chart's UV-on-axis-1. Both series are fully specified
+      # since there's no skin default to inherit (rain's 600s bucket vs the skin's
+      # 1800s gives ~18 bars on a 3-hour window). rainRate's payload_key is set for
+      # completeness, but it isn't in the live loop feed; its history series (jsonengine
+      # reads it from the archive DB) + the dashboard async reload keep it current at
+      # archive cadence.
+      rainAndRate:
         series:
-          - { obs: rain, style: { aggregateInterval: 600 } }
+          - { obs: rainRate, payload_key: rainRate_inch_per_hour,
+              style: { plotType: line, yAxisIndex: 1, lineColor: "#0d3b66",
+                       lineWidth: 2, symbol: none, decimals: 2,
+                       showMaxMarkPoint: true, showMinMarkPoint: false,
+                       showAvgMarkLine: false } }
+          - { obs: rain, payload_key: rain_in,
+              style: { plotType: bar, aggregateType: sum, aggregateInterval: 600,
+                       lineColor: "#428bca", decimals: 2,
+                       showMaxMarkPoint: false, showMinMarkPoint: false,
+                       showAvgMarkLine: false } }
       lightning_strikes:
         # The skin default supplies both series (lightning_distance scatter +
         # lightning_strike_count scatter) with all their styling -- we only
