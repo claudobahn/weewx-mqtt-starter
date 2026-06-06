@@ -146,8 +146,29 @@ dashboard:
   # longer-term trends. Default in fuzzy-archer's stock skin is 27 hours.
   timespan: 3
 
-  navigation:   [index, stats, history, about]    # no news section on MCSC
+  # Bare names use the skin's default Bootstrap-icon/label; a {name, icon}
+  # (or text/title/href) entry overrides just those keys for that page.
+  navigation:
+    - { name: index, icon: bi-speedometer2 }
+    - stats
+    - history
+    - news
+    - { name: about, icon: bi-info-circle }
   station_info: [location, sunRiseSet, moonphase]    # dropped rain + uptime (station/server)
+
+  # News feed (linked from the navbar). Newest first; each entry is a dated card
+  # with a header + body (optional `img: {src, alt, title}`). NOTE: dates are
+  # placeholders -- confirm the years (assumed 2026) and the website launch date.
+  news:
+    - date:   "Coming soon"
+      header: "New weather dashboard"
+      body:   "We're launching this live weather dashboard so members can check the wind and conditions at the Sailing Center before they head out on the water. Launch date to be announced."
+    - date:   "May 15, 2026"
+      header: "New weather station installed"
+      body:   "A new weather station went up at the Sailing Center, bringing live wind, temperature, rain and more back online -- now paired with a dedicated barometer for accurate pressure."
+    - date:   "April 27, 2026"
+      header: "Storm knocks out the weather station"
+      body:   "A spring wind storm off Lake Michigan destroyed the Sailing Center's weather sensor, taking live readings offline until a replacement could be installed."
 
   # v4.4 defaults for stats / history are richer than MCSC's old skin
   # (alltime min/avg/max columns, °F gradient HistoryColors, NOAA report). Keep
