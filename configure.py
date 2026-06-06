@@ -522,6 +522,31 @@ def _items_section(boot, name, key, items):
     _replace_section(boot, name)[key] = [str(x) for x in items]
 
 
+def _emit_navigation(boot, nav):
+    """[[[Navigation]]] navigation_items + optional per-item overrides.
+
+    Each entry is either a bare name (string -- uses the skin's default icon /
+    label / href for that page) or a dict {name, icon, text, title, href}; the
+    given keys merge over the skin's [Navigation][[<name>]] defaults, so you can
+    e.g. swap an icon without restating text/href."""
+    if nav is None:
+        boot.pop("Navigation", None)
+        return
+    s = _replace_section(boot, "Navigation")
+    names = []
+    for entry in nav:
+        if isinstance(entry, dict):
+            name = str(entry["name"])
+            sub = s.setdefault(name, {})
+            for k in ("icon", "text", "title", "href"):
+                if k in entry:
+                    sub[k] = str(entry[k])
+        else:
+            name = str(entry)
+        names.append(name)
+    s["navigation_items"] = names
+
+
 def _emit_stats(boot, stats):
     if not stats:
         boot.pop("Stats", None)
@@ -833,7 +858,7 @@ def apply_dashboard(c, dashboard):
         for name in DASHBOARD_SUBSECTIONS:
             boot.pop(name, None)
         return
-    _items_section(boot, "Navigation",  "navigation_items",   dashboard.get("navigation"))
+    _emit_navigation(boot, dashboard.get("navigation"))
     _items_section(boot, "StationInfo", "station_info_items", dashboard.get("station_info"))
     _emit_stats(boot,        dashboard.get("stats"))
     _emit_history(boot,      dashboard.get("history"))
