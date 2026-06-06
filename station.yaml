@@ -278,12 +278,21 @@ dashboard:
       windDir:
         series:
           - { obs: windDir, payload_key: windDir, style: { symbolSize: 3 } }
-      # outTemp + outHumidity use the fuzzy-archer skin defaults verbatim
-      # (outTemp: outTemp + dewpoint as mark-point lines; outHumidity: a single
-      # mark-point line). They stay in `items` above but are intentionally
-      # ABSENT from `charts` so the skin defaults apply unmodified. The skin's
-      # payload_keys (outTemp_F, dewpoint_F, outHumidity) already match this
-      # stack's MQTTPublish output, so live updates work without an override.
+      # outTemp + barometer inherit the skin chart defaults (payload_keys, mark
+      # points, colours via configobj merge) and add only a minInterval tick-floor
+      # on the value axis: a calm-day band then can't draw over-fine gridlines, and
+      # the axis rounds out to nice boundaries (5 F / 0.1 inHg), which reads calmer.
+      # outTemp sets it on BOTH series because charts.js rebuilds the axis from the
+      # LAST series on it (dewpoint), so a lone outTemp setting would be clobbered.
+      outTemp:
+        series:
+          - { obs: outTemp,  style: { minInterval: 5 } }
+          - { obs: dewpoint, style: { minInterval: 5 } }
+      barometer:
+        series:
+          - { obs: barometer, style: { minInterval: 0.1 } }
+      # outHumidity stays a pure skin default (absent from charts here); its
+      # payload_key (outHumidity) already matches this stack's MQTTPublish output.
       # rainAndRate: a bespoke chart (NOT the skin's obs-named `rain` chart, which is
       # dropped from `items` above) overlaying the instantaneous rain rate as a line
       # over the accumulation bars. A fresh chart name has no skin default to merge
@@ -327,13 +336,16 @@ dashboard:
       radiation:
         # Skin default is a 3-series solar chart: radiation (gold line) +
         # maxSolarRad (lighter-gold clear-sky ceiling, same hue) + UV (purple
-        # bars on a 2nd axis). Restore that styling; only override the two
-        # payload_keys the skin leaves un-suffixed (radiation, maxSolarRad) so
-        # live MQTT matches this stack's append_unit_label keys. UV's bare key
-        # already matches, so the UV series is inherited untouched.
+        # bars on a 2nd axis). Override the two payload_keys the skin leaves
+        # un-suffixed (radiation, maxSolarRad) so live MQTT matches this stack's
+        # append_unit_label keys (UV's bare key already matches), and add a
+        # minInterval tick-floor per axis: 200 W/m^2 on the radiation axis (0) --
+        # set on BOTH axis-0 series so the LAST one doesn't clobber it -- and 1 on
+        # the UV axis (1) for whole-index ticks.
         series:
-          - { obs: radiation,   payload_key: radiation_Wpm2 }
-          - { obs: maxSolarRad, payload_key: maxSolarRad_Wpm2 }
+          - { obs: radiation,   payload_key: radiation_Wpm2,   style: { minInterval: 200 } }
+          - { obs: maxSolarRad, payload_key: maxSolarRad_Wpm2, style: { minInterval: 200 } }
+          - { obs: UV, style: { minInterval: 1 } }
 
   # PNG plots (day/week/month/year pages, plus the index thumbnails when used):
   # match the light day/night band palette that mast-buoy ships with, instead
