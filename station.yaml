@@ -264,18 +264,17 @@ dashboard:
     items: [windSpeed, windDir, outTemp, barometer, rain, outHumidity, lightning_strikes, radiation]
     charts:
       windSpeed:
-        # showRollingIqrBandMinutes draws a translucent rolling interquartile
-        # (Q1-Q3) band behind each series -- the spread of the last N minutes
-        # of wind, centred on the window midpoint (so it tracks rather than
-        # lags). Trying a 10-min window.
+        # showRollingIqrBandMinutes is omitted on purpose: the windStatInject
+        # overlay in the baked fuzzy-archer fork's charts.js draws this chart's
+        # median+IQR band + gust treatments, so the fork's built-in static band
+        # would double up. The two series below are just the raw 60 s dots the
+        # overlay sits on top of.
         series:
           - { obs: windSpeed, payload_key: windSpeed_mph,
               style: { showMaxMarkPoint: true, showMinMarkPoint: true,
-                       lineColor: "#428bca", lineWidth: 0, symbol: circle, symbolSize: 3, decimals: 1,
-                       showRollingIqrBandMinutes: 10 } }
+                       lineColor: "#428bca", lineWidth: 0, symbol: circle, symbolSize: 3, decimals: 1 } }
           - { obs: windGust,  payload_key: windGust_mph,
-              style: { lineColor: "#b44242", lineWidth: 0, symbol: circle, symbolSize: 3, decimals: 1,
-                       showRollingIqrBandMinutes: 10 } }
+              style: { lineColor: "#b44242", lineWidth: 0, symbol: circle, symbolSize: 3, decimals: 1 } }
       windDir:
         series:
           - { obs: windDir, payload_key: windDir, style: { symbolSize: 3 } }
@@ -449,7 +448,7 @@ branding:
   fragments:                                    # HTML/template partials -> skin root
     - nav.html.inc                              # MCSC navbar
     - foot.html.inc                             # MCSC footer
-    - livegauges.html.inc                       # gauge column; #include's radar.html.inc
+    - livegauges.html.inc                       # gauge column; #include's radar
     - about.html.tmpl                           # MCSC About page (generated page)
     - radar.html.inc                            # AOS radar loop (included by livegauges)
 
