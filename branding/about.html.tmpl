@@ -13,33 +13,69 @@
         <!-- Main panel -->
         <div id="${global_main_panel_id}" class="${global_main_panel_classes}">
 
-            <h2>About</h2>
-            <p>This dashboard summarises weather data logged at the
-               <a href="https://www.sailingcenter.org">Milwaukee Community Sailing Center</a>
-               on the shore of Lake Michigan. Conditions are sampled every few seconds and an
-               archive record is written once a minute.</p>
+            <h2>Weather at the Sailing Center</h2>
+            <p>Onshore weather conditions brought to you by the
+               <a href="https://www.sailingcenter.org">Milwaukee Community Sailing Center</a> &mdash;
+               a community sailing center on the Lake Michigan shore, dedicated to making sailing
+               accessible and affordable for everyone. The station updates a few times a minute, so the
+               gauges and charts reflect conditions on the water right now.</p>
 
-            <h2>How it works</h2>
-            <p>Sensor data flows from an
-               <a href="https://docs.openmqttgateway.com/">OpenMQTTGateway</a> receiver into a
-               <a href="https://mosquitto.org/">Mosquitto</a> MQTT broker, where
-               <a href="https://weewx.com">WeeWX</a> consumes it via the
-               <a href="https://github.com/weewx-mqtt/subscribe">weewx-mqtt/subscribe</a>
-               driver. WeeWX writes archive records, generates the static pages you're reading,
-               and re-publishes every loop packet via
-               <a href="https://github.com/weewx-mqtt/publish">weewx-mqtt/publish</a> so the
-               gauges and charts update live in your browser without polling.</p>
+            <h2>Reading the dashboard</h2>
 
-            <p>The dashboard uses the
-               <a href="https://github.com/brewster76/fuzzy-archer">fuzzy-archer</a> skin
-               (Bootstrap + Apache ECharts). The radar loop is the UW-Madison Atmospheric &amp;
-               Oceanic Sciences composite for the Milwaukee region.</p>
+            <h3>Gauges</h3>
+            <p>Each gauge's needle shows the current reading. The red shading around the dial is a
+               quick history of the last hour. The more time the reading has spent at a given
+               level, the deeper the red there &mdash; so you can see the range conditions have
+               covered and where they've settled.</p>
 
-            <h2>Source</h2>
-            <p>Site customizations (location, sensors, dashboard, branding) are driven by
-               YAML configuration; see the
-               <a href="https://github.com/sailingcenter/weewx-mqtt">weewx-mqtt</a> repository,
-               <code>sailing-center</code> branch.</p>
+            <h3>Wind rose</h3>
+            <p>The wind-direction gauge is a <em>wind rose</em>. Each arm points to a direction the
+               wind has been blowing <em>from</em>; the longer the arm, the more often it's come from
+               there recently, and the colours break it down by wind strength.</p>
+
+            <h3>Wind chart</h3>
+            <p>The wind chart is built for sailing. Its background is shaded into strength bands; the
+               bold line is the <strong>sustained wind</strong> (a smoothed average), the shaded band
+               around it is the range the wind has been varying through, and the zone above it reaches
+               up to the <strong>gusts</strong>. The faint dots are the raw minute-by-minute readings.</p>
+            <table class="table table-sm" style="max-width:22rem">
+              <thead><tr><th>Band</th><th>Wind&nbsp;(knots)</th></tr></thead>
+              <tbody>
+                <tr><td>Light</td><td>0&ndash;10</td></tr>
+                <tr><td>Medium</td><td>10&ndash;15</td></tr>
+                <tr><td>Heavy</td><td>15&ndash;20</td></tr>
+                <tr><td>No&nbsp;sailing</td><td>20+</td></tr>
+              </tbody>
+            </table>
+            <p><em>For reference only &mdash; decisions on sailing conditions are made by MCSC
+               staff.</em></p>
+
+            <h2>The weather station</h2>
+            <p>Conditions come from a small set of wireless sensors:</p>
+            <ul>
+              <li><strong>Ecowitt WS90</strong> &mdash; the main all-in-one station: wind speed and
+                  direction, temperature, humidity, rain, UV and sunlight.</li>
+              <li><strong>Ecowitt WH32B</strong> &mdash; a dedicated barometer (the WS90 has none).
+                  The dashboard corrects its pressure to sea level for the barometer reading.</li>
+              <li><strong>Ecowitt WH57</strong> &mdash; a lightning detector. Treat it as a rough,
+                  local hint only &mdash; its distances and strike counts aren't reliable. For
+                  accurate, real-time lightning, use the
+                  <a href="https://map.blitzortung.org/?r#7/43.046/-87.886">Blitzortung network map</a>.</li>
+            </ul>
+
+            <h2>Good to know</h2>
+            <p>These are hobby-grade sensors, shown for interest and planning &mdash; not for
+               navigation or any safety-critical decision. Readings can be imprecise (the lightning
+               detector especially), and the live feed may occasionally lag or drop out.</p>
+
+            <h2>Credits</h2>
+            <p>Built with <a href="https://weewx.com">WeeWX</a> and the
+               <a href="https://github.com/brewster76/fuzzy-archer">fuzzy-archer</a> skin (charts by
+               <a href="https://echarts.apache.org/">Apache ECharts</a>), fed over MQTT via
+               <a href="https://docs.openmqttgateway.com/">OpenMQTTGateway</a> and
+               <a href="https://mosquitto.org/">Mosquitto</a>. The radar loop is the
+               <a href="https://www.aos.wisc.edu/weather/">UW-Madison Atmospheric &amp; Oceanic Sciences</a>
+               composite.</p>
 
         </div>
     </div>
