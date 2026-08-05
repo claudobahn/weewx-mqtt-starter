@@ -396,6 +396,7 @@ dashboard:
           style: { line_type: none, marker_size: 3, marker_type: cross }
           series: [windSpeed, windGust]
         daywinddir-Bootstrap:
+          style: { marker_size: 1 }
           series: [windDir]
         daytemp-Bootstrap:
           series: [outTemp, dewpoint, windchill]
@@ -420,11 +421,19 @@ dashboard:
     week:
       items:
         weekwind-Bootstrap:
+          # aggregate_interval overrides the [week_images] hourly default so BOTH
+          # series (speed avg + gust max) bucket at the 60s archive cadence -- i.e.
+          # raw per-record points, ~10k pts/series for the densest possible cloud.
+          # Set at the PLOT level so only the wind chart is affected (a timespan-level
+          # override would also densify temp/baro/humidity).
+          aggregate_interval: 60
           style: { line_type: none, marker_size: 1, marker_type: cross }
           series:
             - windSpeed
             - { obs: windGust, aggregate_type: max }
         weekwinddir-Bootstrap:
+          aggregate_interval: 60
+          style: { marker_size: 1 }
           series: [windDir]
         weektemp-Bootstrap:
           series: [outTemp, dewpoint, windchill]
@@ -449,10 +458,14 @@ dashboard:
     month:
       items:
         monthwind-Bootstrap:
+          aggregate_interval: 300     # 5-min buckets -> ~8.6k pts/series (vs 3h default)
+          style: { line_type: none, marker_size: 1, marker_type: cross }
           series:
             - windSpeed
             - { obs: windGust, aggregate_type: max }
         monthwinddir-Bootstrap:
+          aggregate_interval: 300
+          style: { marker_size: 1 }
           series: [windDir]
         monthtemp-Bootstrap:
           series: [outTemp, dewpoint, windchill]
@@ -470,10 +483,14 @@ dashboard:
     year:
       items:
         yearwind-Bootstrap:
+          aggregate_interval: 3600    # 1h buckets -> ~8.8k pts/series (vs daily default)
+          style: { line_type: none, marker_size: 1, marker_type: cross }
           series:
             - windSpeed
             - { obs: windGust, aggregate_type: max }
         yearwinddir-Bootstrap:
+          aggregate_interval: 3600
+          style: { marker_size: 1 }
           series: [windDir]
         yeartempmaxmin-Bootstrap:
           # Inherits the skin's daily max/min temperature envelope.
