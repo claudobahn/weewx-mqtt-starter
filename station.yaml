@@ -36,21 +36,25 @@ mqtt:
   websocket_url: "ws://localhost:9001"
 
 # ── Data ingestion (rtl_433 / OMG → WeeWX fields) ─────────────────────────
-# Three real-hardware-equivalent devices:
-#   * Fine Offset WS90    -- primary weather station (wind / temp / humidity /
-#                            UV / rain). No barometer or W/m^2 radiation
-#                            natively -- those would come from an indoor
-#                            gateway (e.g. GW1100) and aren't mapped yet, so
-#                            the barometer gauge + radiation chart stay empty
-#                            until that source is wired.
-#   * Fine Offset WH57    -- lightning detector (strike count + distance).
-#                            strike_count is cumulative; weewx contains_total
-#                            mode computes the per-interval delta.
+# Five sensors, all relayed by OpenMQTTGateway as rtl_433-shaped JSON:
+#   * Fine Offset WS90     -- primary station: wind / temp / humidity / UV / rain
+#                             + light_lux (-> luminosity -> derived radiation, see
+#                             calibrate:). No barometer -- that's the WH32B below.
+#   * EcoWitt WS68         -- secondary anemometer beside the WS90 (wind only),
+#                             mapped to custom extraWindSpeed1/extraWindGust1/extraWindDir1 for
+#                             comparison / QA (see observations: + schema:).
+#   * Fine Offset WH57     -- lightning detector (strike count + distance).
+#                             strike_count is cumulative; weewx contains_total
+#                             mode computes the per-interval delta. (rtl_433
+#                             decodes it under the model "FineOffset-WH31L".)
 #   * AmbientWeather-WH31B -- backup outdoor temp/humidity on channel 1
-#                            (msg_id_field 'channel' suffixes per-channel
-#                            field names: temperature_C_1, humidity_1, ...).
-# Until real hardware (or an OMG bridge) is online, mcsc-publisher stands in
-# with rtl_433-shaped JSON on the same topics.
+#                             (msg_id_field 'channel' suffixes per-channel
+#                             field names: temperature_C_1, humidity_1, ...).
+#   * Fine Offset WH32B    -- dedicated barometer (-> pressure -> StdWXCalculate
+#                             sea-level barometer).
+# Until real hardware (or an OMG bridge) is online, mcsc-publisher stands in with
+# rtl_433-shaped JSON on the same topics (WS90 / WH57 / WH31B / WH32B -- not the
+# WS68 yet).
 sensors:
   unit_system: US
   sources:
@@ -68,6 +72,19 @@ sensors:
         uvi:           { name: UV }
         light_lux:     { name: luminosity }                                # group_illuminance; lux has no convertibles in weewx
         rain_mm:       { name: rain,        units: mm, contains_total: true }
+    - name: ws68
+      # EcoWitt WS68 -- SECONDARY anemometer, mounted next to the WS90 for
+      # comparison / QA: validate the WS90's ultrasonic wind against the WS68's
+      # mechanical cup+vane (catch drift, icing, bearing wear). The two won't
+      # overlay exactly -- different sensing tech -- which is the point. Its wind
+      # maps to custom extraWindSpeed1/extraWindGust1/extraWindDir1 obs (see `observations:` +
+      # `schema:`) because weewx's schema has only ONE native wind slot. The WS68
+      # also emits light_lux/uvi/battery -- left UNMAPPED (the WS90 covers light+UV).
+      topic: home/+/RTL_433toMQTT/EcoWitt-WS68/+
+      fields:
+        wind_avg_m_s: { name: extraWindSpeed1, units: meter_per_second }
+        wind_max_m_s: { name: extraWindGust1,  units: meter_per_second }
+        wind_dir_deg: { name: extraWindDir1 }
     - name: wh57
       # rtl_433 emits "FineOffset-WH31L" as the model string for the WH57
       # lightning detector -- the product is sold as WH57, decoded internally
@@ -101,11 +118,52 @@ sensors:
       fields:
         pressure_hPa: { name: pressure, units: hPa }
 
+# ── Custom observation types (secondary WS68 anemometer) ──────────────────
+# weewx's wview_extended schema has exactly one wind slot (windSpeed/windGust/
+# windDir) and no spare, so the WS68's wind needs custom obs. Registering them in
+# group_speed / group_direction makes display units (knots, via units.groups),
+# the sensors validator, and MQTTPublish's unit-label suffixing all just work.
+observations:
+  - { name: extraWindSpeed1, group: group_speed }
+  - { name: extraWindGust1,  group: group_speed }
+  - { name: extraWindDir1,   group: group_direction }
+
+# ── DB schema: store the custom WS68 obs (extends the stock wview_extended) ─
+# extra_schema.py is read ONCE at DB creation. A fresh DB (production cut-over)
+# gets these columns automatically; an EXISTING DB (staging / local) must be
+# migrated without a wipe:
+#   weectl database add-column extraWindSpeed1 --config /data/weewx.conf -y   (x3)
+#   weectl database rebuild-daily --config /data/weewx.conf -y           (daily summaries)
+schema:
+  extends: wview_extended
+  extra_columns: [extraWindSpeed1, extraWindGust1, extraWindDir1]
+
+# ── Archive aggregation overrides ([Accumulator]) ─────────────────────────
+# weewx applies its composite wind pipeline (max gust + vector-averaged
+# direction) ONLY to the built-in windSpeed/windGust/windDir. A CUSTOM obs
+# falls to the default scalar `avg` extractor -- wrong for a gust (you want the
+# interval PEAK, not the mean) and for a direction (a scalar mean is nonsense
+# across the 0/360 wrap). So the WS68's custom obs need explicit extractors:
+#   extraWindGust1 -> max   (true peak, matching how windGust is handled)
+#   extraWindDir1  -> last  (report the interval's final heading; a scalar avg
+#                            would average e.g. 350 + 10 to 180. Not a true
+#                            magnitude-weighted vector mean -- that needs the
+#                            built-in composite -- but correct near north.)
+# extraWindSpeed1 is omitted -- the default `avg` is already right for a mean
+# wind speed. Entries here layer OVER weewx's built-in accum_dict (config wins,
+# defaults for windSpeed/windGust/windDir stay intact).
+accumulator:
+  extraWindGust1: { extractor: max }
+  extraWindDir1:  { extractor: last }
+
 # ── Quality-control bounds ────────────────────────────────────────────────
 qc:
   windSpeed:           { min: 0,   max: 100, unit: mile_per_hour }
   windGust:            { min: 0,   max: 120, unit: mile_per_hour }
   windDir:             { min: 0,   max: 360, unit: degree_compass }
+  extraWindSpeed1:     { min: 0,   max: 100, unit: mile_per_hour }
+  extraWindGust1:      { min: 0,   max: 120, unit: mile_per_hour }
+  extraWindDir1:       { min: 0,   max: 360, unit: degree_compass }
   UV:                  { min: 0,   max: 20 }
   rainRate:            { min: 0,   max: 10,  unit: inch_per_hour }
   lightning_distance:  { min: 0,   max: 100, unit: km }
@@ -136,6 +194,9 @@ units:
 labels:
   outTemp:     "Temperature"
   outHumidity: "Humidity"
+  extraWindSpeed1:  "Wind Speed (WS68)"
+  extraWindGust1:   "Gust Speed (WS68)"
+  extraWindDir1:    "Wind Direction (WS68)"
 
 # ── Dashboard (fuzzy-archer skin overrides) ───────────────────────────────
 dashboard:
@@ -180,7 +241,7 @@ dashboard:
     # branding/livegauges.html.inc reaches into THIS gauge's ECharts instance
     # (via echarts.getInstanceByDom) and splices in a polar coord system + 4
     # stacked bar series for the rose data on top.
-    items: [windDir, windSpeed, outTemp, windGust, outHumidity, barometer]
+    items: [windDir, outTemp, windSpeed, windGust, extraWindSpeed1, extraWindGust1, outHumidity, barometer]
     gauges:
       windDir:
         payload_key: windDir
@@ -280,9 +341,39 @@ dashboard:
           axisLineEnabled: false
           labelFontSize: 14
           historyTimespan: 1            # heat ring = last 1h
+      extraWindSpeed1:
+        # WS68 secondary anemometer (comparison vs the windSpeed gauge above).
+        # Same scale + colour thresholds as windSpeed so the two read 1:1.
+        payload_key: extraWindSpeed1_mph
+        range: { min: 0, max: 50, splitnumber: 10 }
+        style:
+          lineColor:      ["#aaa", "#ffc000", "#00b050", "#000000"]
+          lineColorUntil: [10, 15, 20, maxvalue]
+          decimals: 0
+          detailColor: "#428bca"        # value-readout colour
+          detailFontSize: 14
+          stuckNeedleEnabled: false
+          axisLineEnabled: false
+          labelFontSize: 14
+          historyTimespan: 1            # heat ring = last 1h
+      extraWindGust1:
+        # WS68 secondary anemometer (comparison vs the windGust gauge above).
+        # Same scale + colour thresholds as windGust so the two read 1:1.
+        payload_key: extraWindGust1_mph
+        range: { min: 0, max: 50, splitnumber: 10 }
+        style:
+          lineColor:      ["#aaa", "#ffc000", "#00b050", "#000000"]
+          lineColorUntil: [10, 15, 20, maxvalue]
+          decimals: 0
+          detailColor: "#428bca"        # value-readout colour
+          detailFontSize: 14
+          stuckNeedleEnabled: false
+          axisLineEnabled: false
+          labelFontSize: 14
+          historyTimespan: 1            # heat ring = last 1h
 
   live_charts:
-    items: [windSpeed, windDir, outTemp, barometer, rainAndRate, outHumidity, lightning_strikes, radiation]
+    items: [windSpeed, extraWindSpeed1, windDir, outTemp, barometer, rainAndRate, outHumidity, lightning_strikes, radiation]
     charts:
       windSpeed:
         # showRollingIqrBandMinutes is omitted on purpose: the windStatInject
@@ -296,9 +387,34 @@ dashboard:
                        lineColor: "#428bca", lineWidth: 0, symbol: circle, symbolSize: 3, decimals: 1 } }
           - { obs: windGust,  payload_key: windGust_mph,
               style: { lineColor: "#b44242", lineWidth: 0, symbol: circle, symbolSize: 3, decimals: 1 } }
-      windDir:
+      extraWindSpeed1:
+        # WS68 secondary anemometer, plotted standalone for side-by-side QA vs the
+        # WS90 windSpeed chart above. A distinct chart id means the WS90-only
+        # windStatInject overlay is a no-op here -- plain speed + gust dots, same
+        # colours as the primary so the eye maps them 1:1.
+        # aggregateType mirrors the server [Accumulator] on the front-end's live
+        # per-interval point (site.js getIntervalValue): gust=max (the interval PEAK,
+        # not the mean), speed=avg. Without it a custom obs defaults to avg, so the
+        # live gust dots would creep toward the interval average and only snap to the
+        # server max at each archive reload (weewx only name-recognises windGust).
         series:
-          - { obs: windDir, payload_key: windDir, style: { symbolSize: 3 } }
+          - { obs: extraWindSpeed1, payload_key: extraWindSpeed1_mph, aggregateType: avg,
+              style: { showMaxMarkPoint: true, showMinMarkPoint: true,
+                       lineColor: "#428bca", lineWidth: 0, symbol: circle, symbolSize: 3, decimals: 1 } }
+          - { obs: extraWindGust1,  payload_key: extraWindGust1_mph, aggregateType: max,
+              style: { lineColor: "#b44242", lineWidth: 0, symbol: circle, symbolSize: 3, decimals: 1 } }
+      windDir:
+        # Two series overlaid on the shared 0-360 axis: WS90 (blue) + WS68 (red)
+        # wind direction, for side-by-side QA. Dots -- they sit on top of each
+        # other when the two anemometers agree; a red dot separating from the blue
+        # flags a divergence (e.g. a misaligned vane).
+        # lineWidth 0 + symbol circle on BOTH series -> dots, not lines. windDir
+        # would inherit that from the skin's default windDir chart, but extraWindDir1
+        # is a new series with no such default (it rendered as a line), so both are
+        # made explicit here.
+        series:
+          - { obs: windDir,       payload_key: windDir,       style: { lineColor: "#428bca", lineWidth: 0, symbol: circle, symbolSize: 3 } }
+          - { obs: extraWindDir1, payload_key: extraWindDir1, aggregateType: last, style: { lineColor: "#b44242", lineWidth: 0, symbol: circle, symbolSize: 3 } }
       # outTemp + barometer inherit the skin chart defaults (payload_keys, mark
       # points, colours via configobj merge) and add only a minInterval tick-floor
       # on the value axis: a calm-day band then can't draw over-fine gridlines, and
@@ -395,6 +511,9 @@ dashboard:
         daywind-Bootstrap:
           style: { line_type: none, marker_size: 3, marker_type: cross }
           series: [windSpeed, windGust]
+        dayextrawind1-Bootstrap:
+          style: { line_type: none, marker_size: 3, marker_type: cross }
+          series: [extraWindSpeed1, extraWindGust1]
         daywinddir-Bootstrap:
           style: { marker_size: 1 }
           series: [windDir]
@@ -431,6 +550,12 @@ dashboard:
           series:
             - windSpeed
             - { obs: windGust, aggregate_type: max }
+        weekextrawind1-Bootstrap:
+          aggregate_interval: 60
+          style: { line_type: none, marker_size: 1, marker_type: cross }
+          series:
+            - extraWindSpeed1
+            - { obs: extraWindGust1, aggregate_type: max }
         weekwinddir-Bootstrap:
           aggregate_interval: 60
           style: { marker_size: 1 }
@@ -463,6 +588,12 @@ dashboard:
           series:
             - windSpeed
             - { obs: windGust, aggregate_type: max }
+        monthextrawind1-Bootstrap:
+          aggregate_interval: 300
+          style: { line_type: none, marker_size: 1, marker_type: cross }
+          series:
+            - extraWindSpeed1
+            - { obs: extraWindGust1, aggregate_type: max }
         monthwinddir-Bootstrap:
           aggregate_interval: 300
           style: { marker_size: 1 }
@@ -488,6 +619,12 @@ dashboard:
           series:
             - windSpeed
             - { obs: windGust, aggregate_type: max }
+        yearextrawind1-Bootstrap:
+          aggregate_interval: 3600
+          style: { line_type: none, marker_size: 1, marker_type: cross }
+          series:
+            - extraWindSpeed1
+            - { obs: extraWindGust1, aggregate_type: max }
         yearwinddir-Bootstrap:
           aggregate_interval: 3600
           style: { marker_size: 1 }
