@@ -490,6 +490,7 @@ sections of `weewx.conf` / `skin.conf` and weewxd resumes.
 | Flipping `contains_total: true` ↔ `false` on a rain-style field | The next message is interpreted with the new semantics — a flip on a counter can produce one rogue delta (a huge spike or a `0`) at the boundary. |
 | Renaming a gauge / chart key under `dashboard.live_gauges` / `live_charts` | The browser-side definition moves cleanly, but cached page tabs / bookmarks pointing at the old anchor go stale. |
 | `sensors.unit_system` on a populated DB | The DB column unit system is set at schema-creation time; changing this here only changes what unit the **driver** publishes loop packets in. The archive stays in its original unit system, and WeeWX converts on the fly. Surprising, not destructive. |
+| **Adding** columns via `schema.extra_columns` (a new stored obs, e.g. the WS68's `windSpeed2`/`windGust2`/`windDir2`) | A **fresh** DB creates them automatically at init. An **existing** DB needs a one-time migration — no wipe: `weectl database add-column <col> --type REAL -y` for each (do this *before* the restart that switches the binding to `extra_schema`, so no obs is silently dropped), then `weectl database rebuild-daily -y` for the daily-summary tables. |
 
 ### Destructive — require `./data` wipe
 
@@ -499,7 +500,7 @@ their original values or follow the wipe-and-restore sequence below.
 | Change | Why |
 |---|---|
 | `station.archive_interval` | The schema is bound to the original interval; changing it on a populated DB produces inconsistent aggregates. |
-| `schema:` (renaming / removing columns, changing types) | `extra_schema.py` is read once when the DB is created; subsequent changes don't migrate existing rows. |
+| `schema:` **renaming / removing columns or changing types** (adding is benign — see above) | `extra_schema.py` is read once when the DB is created; a rename/remove/retype doesn't migrate existing rows (use `weectl database reconfigure` to rebuild into the new schema if you must preserve data). |
 | `WEEWX_DRIVER` swap (env, e.g. between `mqtt` and `simulator`) | The Simulator and MQTTSubscribe driver populate different observation sets; mixing them in one DB gives gaps and confused stats. |
 | Changing the *interpretation* of an existing observation (e.g. remapping `extraTemp1` from a WH31B to a different sensor with different bounds) | Historical rows under that name now reflect a different physical sensor; aggregates are misleading. |
 
