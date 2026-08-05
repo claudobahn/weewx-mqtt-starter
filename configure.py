@@ -469,6 +469,26 @@ def apply_schema(c, schema_cfg):
     c.setdefault("DataBindings", {}).setdefault("wx_binding", {})["schema"] = "user.extra_schema.schema"
 
 
+def apply_accumulator(c, accum):
+    """[Accumulator]: per-obs archive-aggregation overrides.
+
+    YAML: { <obs>: { extractor: max|last|avg|sum|..., adder: ..., merger: ... } }.
+    weewx layers weewx.conf's [Accumulator] IN FRONT of its built-in accum_dict
+    (a ListOfDicts, config wins, defaults remain), so entries here only override
+    the listed obs -- the built-in composite wind handling for windSpeed/windGust/
+    windDir is untouched. Needed because weewx applies the max-gust / vector-dir
+    wind pipeline ONLY to those built-in names; a custom obs (e.g. a second
+    anemometer's extraWindGust1) otherwise falls to the default scalar `avg`
+    extractor -- so a gust obs must be given `extractor: max` here, a direction obs
+    `extractor: last` (a scalar avg is wrong across the 0/360 wrap)."""
+    if not accum:
+        c.pop("Accumulator", None)
+        return
+    s = _replace_section(c, "Accumulator")
+    for obs, opts in accum.items():
+        _passthrough(s.setdefault(str(obs), {}), opts or {})
+
+
 def apply_reports(c):
     """[StdReport]: enable only fuzzy-archer (Bootstrap), into public_html."""
     rep = c.setdefault("StdReport", {})
@@ -921,6 +941,7 @@ def main():
     apply_units(c, yml.get("units") or {})
     apply_labels(c, yml.get("labels") or {})
     apply_schema(c, yml.get("schema") or {})
+    apply_accumulator(c, yml.get("accumulator") or {})
 
     apply_reports(c)
     apply_dashboard(c, yml.get("dashboard") or {})
